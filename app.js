@@ -69,10 +69,16 @@ const ENTITIES = {
     required: ["number", "client_id"],
     unique: "number",
   },
+  expenses: {
+    label: "expense",
+    fields: { date: "text", amount: "num", category: "text", description: "text", vendor: "text",
+      payment_method: "text", paid_by: "num", project_id: "num", notes: "text" },
+    required: ["date", "amount", "description"],
+  },
 };
 const SQL_TYPE = { text: "TEXT", num: "DOUBLE PRECISION", json: "JSONB" };
 // Link fields must point at a row in the same tenant.
-const LINKS = { client_id: "clients", project_id: "projects", owner_id: "users", assignee_id: "users",
+const LINKS = { client_id: "clients", project_id: "projects", owner_id: "users", assignee_id: "users", paid_by: "users",
   invoice_id: "invoices", from_quote: "quotes", from_lead: "leads" };
 
 const DEFAULT_SETTINGS = {
@@ -81,6 +87,8 @@ const DEFAULT_SETTINGS = {
   bank: "", terms: "", logo: "", brandColor: "", docLayout: {},
   regions: ["North", "South", "East", "West", "Central"],
   leadSources: ["Website", "Referral", "Social media", "Cold outreach", "Event", "Advertising", "Other"],
+  expenseCategories: ["Rent", "Salaries", "Travel", "Software & subscriptions", "Office supplies", "Utilities",
+    "Marketing", "Professional fees", "Other"],
 };
 
 // Creates tables on first use, adds columns newer versions introduced, and moves data from the
@@ -218,7 +226,7 @@ function httpError(status, message) { const e = new Error(message); e.status = s
 const logActivity = (tenantId, entity, entityId, action, summary, userId) =>
   q("INSERT INTO activity (tenant_id, entity, entity_id, action, summary, user_id, at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
     [tenantId, entity, entityId, action, summary || null, userId, now()]);
-const describe = rec => rec.name || rec.title || rec.number || `#${rec.id}`;
+const describe = rec => rec.name || rec.title || rec.number || rec.description || `#${rec.id}`;
 
 /* ---------- app ---------- */
 const app = express();

@@ -6,11 +6,12 @@ A CRM for managing leads, clients, projects, tasks, quotations and invoices. It'
 - **Clients:** contact, region, reference and GSTIN. Each client page lists their projects, quotations, invoices and outstanding balance.
 - **Projects and tasks:** status, budgets, deadlines, assignees, and a task board you can drag cards across.
 - **Quotations and invoices:** line items, discount, GST/tax and automatic numbering. Quotations convert to invoices. You can record partial payments, and invoices are marked overdue automatically. Print or save as PDF, or download as HTML.
+- **Expenses:** a simple company expense log with date, amount, category, description, vendor, payment method, who paid and an optional project. Filter by month and category, compare with the previous month, see spending by category, and export to CSV. Projects show what was spent against their budget, and the overview shows the month's spending.
 - **History:** every record shows who added it, who last changed it, and a full change history. The overview shows recent activity.
 - **Multi-tenant:** each company is a tenant. Every user, record, setting and history entry has a `tenant_id`, and all reads and writes are limited to the signed-in user's tenant. Quotation and invoice numbers are unique within a tenant.
 - **Accounts:** there is one **super admin**, created on first run. Only the super admin can add companies (tenants) and create, disable or reset user accounts, in Settings → Accounts. The super admin can switch between tenants from the sidebar. Tenant **administrators** manage their own company's settings. **Members** add and edit records. Only administrators or the person who added a record can delete it.
-- **Settings:** company details, logo, brand colour, regions and lead sources, currency, and quotation/invoice prefixes.
-- **Export:** CSV export for leads, clients, projects, quotations and invoices.
+- **Settings:** company details, logo, brand colour, lists (regions, lead sources, expense categories), currency, and quotation/invoice prefixes.
+- **Export:** CSV export for leads, clients, projects, quotations, invoices and expenses.
 
 ## Deploy to Vercel
 

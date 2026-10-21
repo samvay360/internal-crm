@@ -2,7 +2,7 @@
 "use strict";
 
 /* ---------- constants ---------- */
-const COLS = ["leads","clients","projects","tasks","quotes","invoices"];
+const COLS = ["leads","clients","projects","tasks","quotes","invoices","expenses"];
 const LEAD_STAGES = ["New","Contacted","Qualified","Proposal","Negotiation","Won","Lost"];
 const PROJECT_STATUS = ["Planning","Active","On hold","Completed","Cancelled"];
 const TASK_STATUS = ["To do","In progress","Review","Done"];
@@ -12,15 +12,15 @@ const INVOICE_STATUS = ["Draft","Sent","Void"];
 const PAY_METHODS = ["Bank transfer","Cash","Card","Cheque","Online","Other"];
 const NAV = [
   ["overview","Overview"],["leads","Leads"],["clients","Clients"],["projects","Projects"],["tasks","Tasks"],
-  ["sep"],["quotes","Quotations"],["invoices","Invoices"],["sep"],["settings","Settings"]
+  ["sep"],["quotes","Quotations"],["invoices","Invoices"],["expenses","Expenses"],["sep"],["settings","Settings"]
 ];
 
 /* ---------- state ---------- */
 const S = {
-  data:{leads:[],clients:[],projects:[],tasks:[],quotes:[],invoices:[]},
+  data:{leads:[],clients:[],projects:[],tasks:[],quotes:[],invoices:[],expenses:[]},
   settings:{}, users:[], me:null, activity:[],
   view:"overview", param:null, q:{}, mode:{leads:"board",tasks:"board"},
-  taskFilter:"all", leadRegion:"", settingsTab:"company", sheet:null,
+  taskFilter:"all", leadRegion:"", expMonth:null, expCategory:"", settingsTab:"company", sheet:null,
   tenant:null, tenants:[], allUsers:[],
   dirty:{}, dirtyKey:""   // what the viewer has typed into page forms, kept across redraws
 };
@@ -221,7 +221,7 @@ function doRender(){
   // typed-in values belong to one page of one company; forget them when either changes
   const key=[S.view,S.param,S.tenant?.id].join("|");
   if(key!==S.dirtyKey){ S.dirty={}; S.dirtyKey=key; }
-  const views={overview:viewOverview,leads:viewLeads,clients:viewClients,projects:viewProjects,tasks:viewTasks,quotes:()=>viewDocs("quotes"),invoices:()=>viewDocs("invoices"),settings:viewSettings,client:viewClient,project:viewProject};
+  const views={overview:viewOverview,leads:viewLeads,clients:viewClients,projects:viewProjects,tasks:viewTasks,quotes:()=>viewDocs("quotes"),invoices:()=>viewDocs("invoices"),expenses:viewExpenses,settings:viewSettings,client:viewClient,project:viewProject};
   main.innerHTML=(views[S.view]||viewOverview)();
   // a redraw (e.g. the 30-second refresh) must not wipe what the viewer is typing
   for(const [id,v] of Object.entries(S.dirty)){ const el=document.getElementById(id); if(el&&main.contains(el)) el.value=v; }
@@ -252,6 +252,7 @@ function viewOverview(){
     <div class="panel kpi"><div class="label">Open pipeline</div><div class="value">${money(pipeline)}</div><div class="sub">${openLeads.length} open lead${openLeads.length===1?"":"s"} · win rate ${winRate}</div></div>
     <div class="panel kpi"><div class="label">Outstanding</div><div class="value">${money(outstanding)}</div><div class="sub">${overdue.length?`<span style="color:var(--bad)">${overdue.length} overdue</span>`:"Nothing overdue"}</div></div>
     <div class="panel kpi"><div class="label">Received this month</div><div class="value">${money(paidMonth)}</div><div class="sub">Payments recorded in ${new Date().toLocaleDateString(undefined,{month:"long"})}</div></div>
+    <div class="panel kpi"><div class="label">Spent this month</div><div class="value">${money(d.expenses.filter(e=>(e.date||"").startsWith(month)).reduce((a,e)=>a+num(e.amount),0))}</div><div class="sub">${d.expenses.filter(e=>(e.date||"").startsWith(month)).length} expense${d.expenses.filter(e=>(e.date||"").startsWith(month)).length===1?"":"s"} recorded</div></div>
     <div class="panel kpi"><div class="label">Active projects</div><div class="value">${activeProj.length}</div><div class="sub">${dueTasks.length} task${dueTasks.length===1?"":"s"} due within 7 days</div></div>
   </div><div class="grid2">`;
   h+=`<section class="panel"><h2>Tasks due soon</h2>${dueTasks.length?`<ul class="list-plain">${dueTasks.slice(0,8).map(x=>`<li data-open="tasks:${x.id}"><span><span class="cell-main">${esc(x.title)}</span><br><span class="cell-sub">${esc(projectName(x.project_id)||"No project")} · ${esc(userName(x.assignee_id))}</span></span><span class="meta" style="${x.due_date<t?"color:var(--bad)":""}">${x.due_date<t?"Overdue · ":""}${fmtDate(x.due_date)}</span></li>`).join("")}</ul>`:`<div class="empty">No open tasks due this week.</div>`}</section>`;
@@ -325,9 +326,10 @@ function viewProject(){
   const p=byId("projects",S.param);
   if(!p) return head("Project not found","")+`<button class="btn" data-go="projects">Back to projects</button>`;
   const tasks=S.data.tasks.filter(t=>t.project_id===p.id), pr=projProgress(p);
+  const spent=S.data.expenses.filter(e=>e.project_id===p.id).reduce((a,e)=>a+num(e.amount),0);
   const billed=S.data.invoices.filter(i=>i.project_id===p.id&&!["Draft","Void"].includes(i.status)).reduce((s,i)=>s+totals(i).total,0);
-  let h=head(p.name,`<button class="btn ghost sm" data-go="projects">← All projects</button>`,`<button class="btn" data-open="projects:${p.id}">Edit</button><button class="btn" data-act="new-invoices" data-client="${p.client_id||""}" data-project="${p.id}">Invoice this project</button><button class="btn primary" data-act="new-task" data-project="${p.id}">Add task</button>`);
-  const cells=[["Client",p.client_id?`<a href="#" data-go-detail="client:${p.client_id}">${esc(clientName(p.client_id))}</a>`:"Internal"],["Status",pill(p.status||"Planning")],["Project lead",esc(p.owner_id?userName(p.owner_id):"—")],["Start",fmtDate(p.start_date)],["Due",fmtDate(p.due_date)],["Budget",`<span class="num">${p.budget?money(p.budget):"—"}</span>`],["Invoiced",`<span class="num">${money(billed)}</span>`],["Progress",`${pr.pct}% <span class="cell-sub">(${pr.done} of ${pr.n} tasks)</span>`]];
+  let h=head(p.name,`<button class="btn ghost sm" data-go="projects">← All projects</button>`,`<button class="btn" data-open="projects:${p.id}">Edit</button><button class="btn" data-act="new-invoices" data-client="${p.client_id||""}" data-project="${p.id}">Invoice this project</button><button class="btn" data-act="new-expense">Add expense</button><button class="btn primary" data-act="new-task" data-project="${p.id}">Add task</button>`);
+  const cells=[["Client",p.client_id?`<a href="#" data-go-detail="client:${p.client_id}">${esc(clientName(p.client_id))}</a>`:"Internal"],["Status",pill(p.status||"Planning")],["Project lead",esc(p.owner_id?userName(p.owner_id):"—")],["Start",fmtDate(p.start_date)],["Due",fmtDate(p.due_date)],["Budget",`<span class="num">${p.budget?money(p.budget):"—"}</span>`],["Expenses",`<span class="num" style="${p.budget&&spent>p.budget?"color:var(--bad)":""}">${money(spent)}</span>${p.budget?` <span class="cell-sub">of ${money(p.budget)} budget</span>`:""}`],["Invoiced",`<span class="num">${money(billed)}</span>`],["Progress",`${pr.pct}% <span class="cell-sub">(${pr.done} of ${pr.n} tasks)</span>`]];
   h+=`<div class="panel" style="margin-bottom:16px"><dl class="detail-grid">${cells.map(([k,v])=>`<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>${p.description?`<div style="padding:0 16px 16px;white-space:pre-wrap;color:var(--muted)">${esc(p.description)}</div>`:""}</div>`;
   return h+(tasks.length?taskBoard(tasks):`<div class="panel">${emptyState("No tasks in this project","Break the work into tasks and assign them to people on your team.","Add a task","new-task")}</div>`);
 }
@@ -369,9 +371,48 @@ function viewDocs(col){
   return h;
 }
 
+/* ---------- expenses ---------- */
+const monthKey = iso => (iso||"").slice(0,7);
+const monthLabel = key => { const [y,m]=key.split("-").map(Number); return new Date(y,m-1,1).toLocaleDateString(undefined,{month:"long",year:"numeric"}); };
+function viewExpenses(){
+  const all=S.data.expenses, thisMonth=monthKey(todayISO());
+  const month=S.expMonth??thisMonth;
+  const months=[...new Set([thisMonth,...all.map(e=>monthKey(e.date)).filter(Boolean)])].sort().reverse();
+  const cats=[...new Set([...(S.settings.expenseCategories||[]),...all.map(e=>e.category).filter(Boolean)])];
+  let rows=all.filter(e=>(month==="all"||monthKey(e.date)===month)&&(!S.expCategory||e.category===S.expCategory)&&matches({...e,_by:userName(e.paid_by),_p:projectName(e.project_id)},S.q.expenses))
+    .sort((a,b)=>(b.date||"").localeCompare(a.date||"")||b.id-a.id);
+  const total=rows.reduce((a,e)=>a+num(e.amount),0);
+  let h=head("Expenses","Record what the company spends, and see where the money goes each month.",
+    `${searchBox("expenses")}<select class="input inline" id="exp-month" aria-label="Month"><option value="all" ${month==="all"?"selected":""}>All months</option>${months.map(m=>`<option value="${m}" ${m===month?"selected":""}>${monthLabel(m)}</option>`).join("")}</select>
+    <select class="input inline" id="exp-cat" aria-label="Category"><option value="">All categories</option>${cats.map(c=>`<option ${c===S.expCategory?"selected":""}>${esc(c)}</option>`).join("")}</select>
+    <button class="btn" data-act="csv-expenses">Export CSV</button>${addBtn("Add expense","new-expense")}`);
+  if(!all.length) return h+`<div class="panel">${emptyState("No expenses yet","Add rent, salaries, travel, software and anything else the company pays for.","Add your first expense","new-expense")}</div>`;
+  // compare with the previous month when a single month is selected
+  let compare="";
+  if(month!=="all"){
+    const [y,m]=month.split("-").map(Number), prev=new Date(y,m-2,1), pk=`${prev.getFullYear()}-${String(prev.getMonth()+1).padStart(2,"0")}`;
+    const prevTotal=all.filter(e=>monthKey(e.date)===pk&&(!S.expCategory||e.category===S.expCategory)).reduce((a,e)=>a+num(e.amount),0);
+    compare=prevTotal?`${total>=prevTotal?"▲":"▼"} ${money(Math.abs(total-prevTotal))} vs ${monthLabel(pk)}`:`Nothing recorded in ${monthLabel(pk)}`;
+  }
+  const byCat=Object.entries(rows.reduce((o,e)=>{ const k=e.category||"Uncategorised"; o[k]=(o[k]||0)+num(e.amount); return o; },{})).sort((a,b)=>b[1]-a[1]);
+  const maxC=Math.max(1,...byCat.map(x=>x[1]));
+  h+=`<div class="kpis">
+    <div class="panel kpi"><div class="label">${month==="all"?"Total spent":"Spent in "+monthLabel(month)}</div><div class="value">${money(total)}</div><div class="sub">${compare||`${rows.length} expenses`}</div></div>
+    <div class="panel kpi"><div class="label">Expenses</div><div class="value">${rows.length}</div><div class="sub">${S.expCategory?esc(S.expCategory):"All categories"}</div></div>
+    <div class="panel kpi"><div class="label">Largest category</div><div class="value" style="font-size:20px">${byCat[0]?esc(byCat[0][0]):"—"}</div><div class="sub">${byCat[0]?money(byCat[0][1]):"Nothing in this period"}</div></div>
+  </div>`;
+  if(!rows.length) return h+`<div class="panel">${emptyState("Nothing in this period","Try another month or category, or add an expense.","Add expense","new-expense")}</div>`;
+  h+=`<div class="grid2" style="grid-template-columns:minmax(0,2fr) minmax(260px,1fr);align-items:start">
+  <div class="panel table-wrap"><table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Paid by</th><th>Method</th><th class="r">Amount</th></tr></thead><tbody>${rows.map(e=>`<tr data-open="expenses:${e.id}"><td style="white-space:nowrap">${fmtDate(e.date)}</td><td><div class="cell-main">${esc(e.description)}</div><div class="cell-sub">${esc([e.vendor,projectName(e.project_id)].filter(Boolean).join(" · "))}</div></td><td>${e.category?`<span class="tag">${esc(e.category)}</span>`:"—"}</td><td>${esc(e.paid_by?userName(e.paid_by):"—")}</td><td>${esc(e.payment_method||"—")}</td><td class="r num">${money(e.amount)}</td></tr>`).join("")}
+  <tr><td colspan="5" class="cell-main">Total</td><td class="r num cell-main">${money(total)}</td></tr></tbody></table></div>
+  <section class="panel"><h2>By category</h2><div style="padding:14px 18px;display:grid;gap:12px">${byCat.map(([c,v])=>`<div style="display:grid;gap:4px;font-size:13px"><div style="display:flex;justify-content:space-between;gap:8px"><span>${esc(c)}</span><span class="num">${money(v)} <span class="cell-sub">${Math.round(v/total*100)}%</span></span></div><div class="progress"><i style="width:${(v/maxC*100).toFixed(1)}%"></i></div></div>`).join("")}</div></section>
+  </div>`;
+  return h;
+}
+
 /* ---------- settings ---------- */
 function viewSettings(){
-  const tabs=[["company","Company"],["branding","Branding"],["lists","Regions & sources"],["team",isSuper()?"Accounts":"Team"],["account","My account"]];
+  const tabs=[["company","Company"],["branding","Branding"],["lists","Lists"],["team",isSuper()?"Accounts":"Team"],["account","My account"]];
   if(isAdmin()) tabs.splice(3,0,["documents","Documents"]);
   const tab=S.settingsTab;
   let h=head("Settings",isSuper()?`Settings for ${esc(S.tenant?.name||"this company")}, plus every company and user account.`:isAdmin()?"Company details, branding and lists. Accounts are created by the super admin.":"Your account. Company settings can be changed by an administrator.");
@@ -399,6 +440,7 @@ function viewSettings(){
   if(tab==="lists") h+=`<form class="panel" data-settings-form style="padding:18px;max-width:780px"><div class="form">
     <div class="field"><label for="s-regions">Regions</label><textarea class="input" id="s-regions" style="min-height:180px" ${dis}>${esc((s.regions||[]).join("\n"))}</textarea><span class="hint">One per line. Offered when adding leads, clients and projects.</span></div>
     <div class="field"><label for="s-leadSources">Lead sources</label><textarea class="input" id="s-leadSources" style="min-height:180px" ${dis}>${esc((s.leadSources||[]).join("\n"))}</textarea><span class="hint">One per line.</span></div>
+    <div class="field"><label for="s-expenseCategories">Expense categories</label><textarea class="input" id="s-expenseCategories" style="min-height:180px" ${dis}>${esc((s.expenseCategories||[]).join("\n"))}</textarea><span class="hint">One per line. Offered when adding expenses.</span></div>
     </div>${saveBtn}</form>`;
   if(tab==="documents"&&isAdmin()) h+=layoutEditor();
   if(tab==="team") h+=isSuper()?accountsAdmin():teamList();
@@ -513,7 +555,13 @@ const FORMS = {
   tasks:{title:"task",fields:[
     ["title","Task","text",{req:1,full:1}],["project_id","Project","project"],["status","Status","select",{opts:()=>TASK_STATUS}],
     ["priority","Priority","select",{opts:()=>PRIORITIES}],["due_date","Due date","date"],["assignee_id","Assignee","person"],
-    ["description","Details","textarea",{full:1}]]}
+    ["description","Details","textarea",{full:1}]]},
+  expenses:{title:"expense",fields:[
+    ["description","What was it for?","text",{req:1,full:1,ph:"e.g. Office rent for October"}],
+    ["amount","Amount","number",{req:1}],["date","Date","date",{req:1}],
+    ["category","Category","select",{opts:()=>["",...(S.settings.expenseCategories||[])]}],["vendor","Paid to","text",{ph:"Vendor or person"}],
+    ["payment_method","Payment method","select",{opts:()=>["",...PAY_METHODS]}],["paid_by","Paid by","person"],
+    ["project_id","Project","project"],["notes","Notes","textarea",{full:1,ph:"Bill or reference number, anything useful later"}]]}
 };
 function options(list,v,blank){
   const all=[...list]; if(v&&!all.includes(v)) all.push(v);
@@ -552,12 +600,12 @@ function openRecord(col,id,preset={}){
   if(col==="quotes"||col==="invoices") return openDocEditor(col,id,preset);
   const F=FORMS[col]; if(id&&!byId(col,id)) return toast("This record no longer exists.");
   const rec=id?{...byId(col,id)}:{...preset};
-  if(!id){ if(col==="leads"){ rec.stage??="New"; rec.owner_id??=S.me.id; } if(col==="projects") rec.status??="Planning"; if(col==="tasks"){ rec.status??="To do"; rec.priority??="Medium"; } }
+  if(!id){ if(col==="leads"){ rec.stage??="New"; rec.owner_id??=S.me.id; } if(col==="projects") rec.status??="Planning"; if(col==="expenses"){ rec.date??=todayISO(); rec.paid_by??=S.me.id; } if(col==="tasks"){ rec.status??="To do"; rec.priority??="Medium"; } }
   S.sheet={col,id:id?Number(id):null};
   const canDelete=id&&(isAdmin()||rec.created_by===S.me.id);
   let extra="";
   if(col==="leads"&&id) extra+=`<button type="button" class="btn" data-act="convert-lead">${rec.client_id&&byId("clients",rec.client_id)?"View client":"Convert to client"}</button>`;
-  openSheet(`<form id="rec-form" style="display:contents" novalidate><div class="sheet-head"><h2>${id?esc(rec.name||rec.title):"New "+F.title}</h2><button type="button" class="btn ghost" data-close aria-label="Close">✕</button></div>
+  openSheet(`<form id="rec-form" style="display:contents" novalidate><div class="sheet-head"><h2>${id?esc(rec.name||rec.title||rec.description):"New "+F.title}</h2><button type="button" class="btn ghost" data-close aria-label="Close">✕</button></div>
   <div class="sheet-body">${metaStrip(rec)}<div class="form">${F.fields.map(f=>fieldHtml(f,rec)).join("")}</div>${id?`<h3 class="sub-head">History</h3><div id="history"><p class="hint">Loading…</p></div>`:""}</div>
   <div class="sheet-foot"><div class="grp">${canDelete?`<button type="button" class="btn danger" data-act="delete-rec">Delete</button>`:""}${extra}</div><div class="grp"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">${id?"Save changes":"Create "+F.title}</button></div></div></form>`);
   if(id) loadHistory(col,id);
@@ -677,6 +725,7 @@ function exportCsv(col){
   const defs={
     leads:[["Name","name"],["Company","company"],["Email","email"],["Phone","phone"],["Region","region"],["Reference","ref"],["Stage","stage"],["Source","source"],["Value","value"],["Owner",r=>r.owner_id?userName(r.owner_id):""],["Added by",r=>userName(r.created_by)],["Added on","created_at"],["Next follow-up","next_follow_up"],["Notes","notes"]],
     clients:[["Company","company"],["Contact","name"],["Email","email"],["Phone","phone"],["Region","region"],["Reference","ref"],["Address","address"],["Tax no.","tax_id"],["Website","website"],["Added by",r=>userName(r.created_by)]],
+    expenses:[["Date","date"],["Description","description"],["Category","category"],["Amount","amount"],["Paid to","vendor"],["Payment method","payment_method"],["Paid by",r=>r.paid_by?userName(r.paid_by):""],["Project",r=>projectName(r.project_id)],["Notes","notes"],["Added by",r=>userName(r.created_by)]],
     projects:[["Project","name"],["Client",r=>clientName(r.client_id)],["Status","status"],["Region","region"],["Start","start_date"],["Due","due_date"],["Budget","budget"]],
     quotes:[["Number","number"],["Client",r=>clientName(r.client_id)],["Reference","ref"],["Date","date"],["Valid until","valid_until"],["Status",quoteStatus],["Total",r=>totals(r).total.toFixed(2)]],
     invoices:[["Number","number"],["Client",r=>clientName(r.client_id)],["Reference","ref"],["Date","date"],["Due","due_date"],["Status",invoiceStatus],["Total",r=>totals(r).total.toFixed(2)],["Paid",r=>totals(r).paid.toFixed(2)],["Balance",r=>totals(r).balance.toFixed(2)]]
@@ -724,6 +773,7 @@ document.addEventListener("click",async e=>{
   if(a==="logout"){ try{ await api("POST","/api/logout"); }catch(_){} location.reload(); return; }
   if(a==="new-lead") return openRecord("leads");
   if(a==="new-client") return openRecord("clients");
+  if(a==="new-expense") return openRecord("expenses",null,S.view==="project"?{project_id:S.param}:{});
   if(a==="new-project") return openRecord("projects",null,el.dataset.client?{client_id:Number(el.dataset.client)}:{});
   if(a==="new-task") return openRecord("tasks",null,{project_id:Number(el.dataset.project)||(S.view==="project"?S.param:null)});
   if(a==="new-quotes"||a==="new-invoices"){ const col=a.slice(4); if(!S.data.clients.length){ toast("Add a client first."); return openRecord("clients"); }
@@ -759,7 +809,7 @@ document.addEventListener("click",async e=>{
 
 function trackDirty(el){
   if(el.dataset.l||el.dataset.lPick) return; // layout editor keeps its own draft
-  if(el.id&&el.type!=="file"&&el.dataset.search==null&&!["tenant-switch","lead-region","task-filter"].includes(el.id)&&$("#main")?.contains(el)) S.dirty[el.id]=el.value;
+  if(el.id&&el.type!=="file"&&el.dataset.search==null&&!["tenant-switch","lead-region","task-filter","exp-month","exp-cat"].includes(el.id)&&$("#main")?.contains(el)) S.dirty[el.id]=el.value;
 }
 function clearDirty(form){ for(const el of form.elements) delete S.dirty[el.id]; }
 function layoutInput(el){
@@ -785,6 +835,8 @@ document.addEventListener("change",async e=>{
   trackDirty(el);
   if(el.id==="task-filter"){ S.taskFilter=el.value; return render(); }
   if(el.id==="lead-region"){ S.leadRegion=el.value; return render(); }
+  if(el.id==="exp-month"){ S.expMonth=el.value; return render(); }
+  if(el.id==="exp-cat"){ S.expCategory=el.value; return render(); }
   if(el.id==="tenant-switch") return switchTenant(+el.value);
   if(el.dataset.d==="client_id"&&S.sheet?.doc){ S.sheet.doc.client_id=Number(el.value)||null; drawDocEditor(); }
   if(el.id==="s-logo-file"&&el.files[0]){
@@ -808,7 +860,7 @@ document.addEventListener("submit",async e=>{
     const body={};
     for(const el of form.querySelectorAll("input[id^=s-],textarea[id^=s-]")){
       const k=el.id.slice(2); if(k.endsWith("-file")||k.endsWith("-pick")) continue;
-      body[k]=["regions","leadSources"].includes(k)?el.value.split("\n").map(x=>x.trim()).filter(Boolean):el.type==="number"?num(el.value):el.value.trim();
+      body[k]=["regions","leadSources","expenseCategories"].includes(k)?el.value.split("\n").map(x=>x.trim()).filter(Boolean):el.type==="number"?num(el.value):el.value.trim();
     }
     if("currency" in body){ body.currency=body.currency.toUpperCase(); try{ new Intl.NumberFormat(undefined,{style:"currency",currency:body.currency}); }catch(_){ toast(`"${body.currency}" is not a currency code. Use 3 letters, such as USD or LKR.`); return; } }
     try{ S.settings=await api("PUT","/api/settings",body); clearDirty(form); applyBrand(S.settings); render(); toast("Settings saved"); }catch(err){ toast(err.message); }

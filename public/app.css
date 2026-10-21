@@ -123,7 +123,7 @@ td.r,th.r{text-align:right}
 .pill.bad{background:var(--bad-soft);color:var(--bad)}
 .pill.info{background:var(--info-soft);color:var(--info)}
 .pill.accent{background:var(--accent-soft);color:var(--accent)}
-.tag{display:inline-block;padding:1px 8px;border-radius:999px;border:1px solid var(--line-strong);color:var(--muted);font-family:var(--font-num);font-size:10.5px}
+.tag{display:inline-block;white-space:nowrap;padding:1px 8px;border-radius:999px;border:1px solid var(--line-strong);color:var(--muted);font-family:var(--font-num);font-size:10.5px}
 
 .board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(240px,1fr);gap:12px;overflow-x:auto;padding-bottom:8px}
 .col{background:color-mix(in srgb,var(--sunk) 80%,transparent);border:1px solid var(--line);border-radius:var(--r);padding:10px;display:flex;flex-direction:column;gap:8px;min-height:160px}
