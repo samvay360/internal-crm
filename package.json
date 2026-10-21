@@ -1,0 +1,20 @@
+{
+  "name": "samvay360-crm",
+  "version": "1.0.0",
+  "description": "Company CRM: leads, clients, projects, tasks, quotations and invoices",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --env-file-if-exists=.env --watch server.js"
+  },
+  "author": "",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "express": "^5.3.0",
+    "pg": "^8.23.1"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "private": true
+}
