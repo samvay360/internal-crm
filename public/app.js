@@ -225,6 +225,7 @@ function doRender(){
   main.innerHTML=(views[S.view]||viewOverview)();
   // a redraw (e.g. the 30-second refresh) must not wipe what the viewer is typing
   for(const [id,v] of Object.entries(S.dirty)){ const el=document.getElementById(id); if(el&&main.contains(el)) el.value=v; }
+  fitLayoutPreview();
   if(activeId){ const el=document.getElementById(activeId); if(el){ el.focus({preventScroll:true}); if(selStart!=null) try{ el.setSelectionRange(selStart,selEnd); }catch(e){} } }
 }
 
@@ -371,6 +372,7 @@ function viewDocs(col){
 /* ---------- settings ---------- */
 function viewSettings(){
   const tabs=[["company","Company"],["branding","Branding"],["lists","Regions & sources"],["team",isSuper()?"Accounts":"Team"],["account","My account"]];
+  if(isAdmin()) tabs.splice(3,0,["documents","Documents"]);
   const tab=S.settingsTab;
   let h=head("Settings",isSuper()?`Settings for ${esc(S.tenant?.name||"this company")}, plus every company and user account.`:isAdmin()?"Company details, branding and lists. Accounts are created by the super admin.":"Your account. Company settings can be changed by an administrator.");
   h+=`<div class="tabs" role="tablist">${tabs.map(([k,l])=>`<button role="tab" data-stab="${k}" aria-selected="${tab===k}">${l}</button>`).join("")}</div>`;
@@ -398,6 +400,7 @@ function viewSettings(){
     <div class="field"><label for="s-regions">Regions</label><textarea class="input" id="s-regions" style="min-height:180px" ${dis}>${esc((s.regions||[]).join("\n"))}</textarea><span class="hint">One per line. Offered when adding leads, clients and projects.</span></div>
     <div class="field"><label for="s-leadSources">Lead sources</label><textarea class="input" id="s-leadSources" style="min-height:180px" ${dis}>${esc((s.leadSources||[]).join("\n"))}</textarea><span class="hint">One per line.</span></div>
     </div>${saveBtn}</form>`;
+  if(tab==="documents"&&isAdmin()) h+=layoutEditor();
   if(tab==="team") h+=isSuper()?accountsAdmin():teamList();
   if(tab==="account") h+=`<form class="panel" id="account-form" style="padding:18px;max-width:560px"><div class="form">
     <div class="field full"><label for="m-name">Your name</label><input class="input" id="m-name" value="${esc(S.me.name)}"></div>
@@ -407,6 +410,67 @@ function viewSettings(){
     </div><span class="hint">Leave the password fields empty to keep your password.</span><div style="margin-top:14px"><button class="btn primary" type="submit">Save</button></div></form>`;
   return h;
 }
+
+/* ---------- document layout editor ---------- */
+const layoutDraft = () => (S.layoutDraft ??= savedLayout());
+const layoutChanged = () => JSON.stringify(layoutDraft())!==JSON.stringify(savedLayout());
+// Preview data: the latest real invoice/quotation, otherwise a clearly-labelled sample.
+function previewDoc(kind){
+  const col=kind==="quotation"?"quotes":"invoices";
+  const real=S.data[col].find(x=>(x.items||[]).length);
+  if(real) return {col,doc:real,sample:false};
+  const t=todayISO();
+  return {col,sample:true,doc:{number:(kind==="quotation"?S.settings.quotePrefix:S.settings.invoicePrefix)+"0001",date:t,due_date:addDays(t,14),valid_until:addDays(t,30),ref:"PO-4521",title:"Website redesign",
+    tax_rate:num(S.settings.taxRate)||18,discount:0,notes:S.settings.terms||"Payment due within 14 days.",payments:[],
+    items:[{desc:"Website design and development",hsn:"998314",qty:1,rate:45000},{desc:"Annual hosting and support",hsn:"998315",qty:1,rate:12000},{desc:"Content writing (per page)",hsn:"998399",qty:6,rate:1500}],
+    _client:{company:"Sample Client Pvt Ltd",name:"Ravi Mehta",address:"12 Ring Road\nSurat, Gujarat 395002",tax_id:"24ABCDE1234F1Z5"}}};
+}
+function layoutPreviewHtml(layout){ const p=previewDoc(S.layoutKind||"invoice"); return docPaper(p.col,p.doc,layout); }
+function layoutEditor(){
+  const L=layoutDraft(), T=DocTemplates.TEMPLATES, F=DocTemplates.FONTS, p=previewDoc(S.layoutKind||"invoice");
+  const chk=(k,label)=>`<label><input type="checkbox" data-l="${k}" ${L[k]?"checked":""}> ${label}</label>`;
+  const txt=(k,label,ph="")=>`<div class="field"><label for="L-${k}">${label}</label><input class="input" id="L-${k}" data-l="${k}" value="${esc(L[k])}" placeholder="${esc(ph)}"></div>`;
+  return `<div class="layout-editor">
+  <div class="panel le-controls">
+    <div><h3 class="sub-head" style="margin-top:0">Layout</h3><div class="tpl-grid" id="tpl-grid">${T.map(t=>`<button type="button" class="tpl-card" data-tpl="${t.id}" aria-pressed="${L.template===t.id}"><div class="tpl-thumb">${layoutPreviewHtml({...L,template:t.id})}</div><b>${t.name}</b><small>${t.blurb}</small></button>`).join("")}</div></div>
+    <div><h3 class="sub-head" style="margin-top:0">Style</h3><div class="form">
+      <div class="field"><label for="L-accent">Accent colour</label><div style="display:flex;gap:8px"><input type="color" id="L-accent-pick" data-l-pick="accent" value="${esc(L.accent||S.settings.brandColor||"#b8652c")}" aria-label="Pick accent colour" style="width:44px;height:38px;border:1px solid var(--line-strong);border-radius:8px;background:none;flex:none"><input class="input mono" id="L-accent" data-l="accent" value="${esc(L.accent)}" placeholder="Auto"></div></div>
+      <div class="field"><label for="L-font">Font</label><select class="input" id="L-font" data-l="font">${Object.entries(F).map(([k,f])=>`<option value="${k}" ${L.font===k?"selected":""}>${f.label}</option>`).join("")}</select></div>
+      <div class="field"><label for="L-paper">Paper size</label><select class="input" id="L-paper" data-l="paper">${["A4","Letter"].map(x=>`<option ${L.paper===x?"selected":""}>${x}</option>`).join("")}</select></div>
+      <div class="field"><label for="L-taxDisplay">Show tax as</label><select class="input" id="L-taxDisplay" data-l="taxDisplay">${[["single","One tax line"],["cgst_sgst","CGST + SGST (within state)"],["igst","IGST (other state)"]].map(([v,l])=>`<option value="${v}" ${L.taxDisplay===v?"selected":""}>${l}</option>`).join("")}</select></div>
+    </div></div>
+    <div><h3 class="sub-head" style="margin-top:0">Text</h3><div class="form">
+      ${txt("invoiceTitle","Invoice title","Invoice")}${txt("quoteTitle","Quotation title","Quotation")}
+      ${txt("signatureLabel","Signature label","Authorised Signatory")}${txt("footer","Footer","Thank you for your business.")}
+    </div></div>
+    <div><h3 class="sub-head" style="margin-top:0">Show on document</h3><div class="checks">
+      ${chk("showLogo","Logo")}${chk("showSellerGstin","Our GSTIN")}${chk("showBuyerGstin","Client GSTIN")}${chk("showHsn","HSN/SAC column")}
+      ${chk("showWords","Amount in words")}${chk("showBank","Bank details")}${chk("showNotes","Notes & terms")}${chk("showSignature","Signature block")}
+    </div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" class="btn primary" data-act="save-layout">Save layout</button><button type="button" class="btn" data-act="reset-layout">Reset to default</button><span class="unsaved" id="le-unsaved" ${layoutChanged()?"":"hidden"}>Unsaved changes</span></div>
+  </div>
+  <div class="le-preview">
+    <div class="le-preview-head"><div class="seg" role="group" aria-label="Preview document"><button type="button" data-lkind="invoice" aria-pressed="${(S.layoutKind||"invoice")==="invoice"}">Invoice</button><button type="button" data-lkind="quotation" aria-pressed="${S.layoutKind==="quotation"}">Quotation</button></div>
+      <span class="hint">${p.sample?"Sample data. Your latest real document will show here once you create one.":`Showing ${esc(p.doc.number)}`}</span></div>
+    <div class="le-frame"><div class="le-paper ${L.paper==="Letter"?"letter":""}" id="le-paper">${layoutPreviewHtml(L)}</div></div>
+  </div></div>`;
+}
+// Fit the 794px-wide (A4 at 96 dpi) paper into the preview column and the thumbnails.
+function fitLayoutPreview(){
+  const paper=$("#le-paper"); if(!paper) return;
+  const doc=paper.firstElementChild, w=paper.parentElement.clientWidth-32, scale=Math.min(1,w/794);
+  doc.style.transform=`scale(${scale})`;
+  paper.style.width=794*scale+"px"; paper.style.height=Math.max(doc.offsetHeight,paper.classList.contains("letter")?1056:1123)*scale+"px";
+  document.querySelectorAll(".tpl-thumb").forEach(t=>t.style.setProperty("--thumb-scale",t.clientWidth/794));
+}
+function updateLayoutPreview(){
+  const L=layoutDraft(), paper=$("#le-paper"); if(!paper) return;
+  paper.innerHTML=layoutPreviewHtml(L); paper.classList.toggle("letter",L.paper==="Letter");
+  document.querySelectorAll(".tpl-card").forEach(c=>{ c.setAttribute("aria-pressed",String(c.dataset.tpl===L.template)); c.querySelector(".tpl-thumb").innerHTML=layoutPreviewHtml({...L,template:c.dataset.tpl}); });
+  $("#le-unsaved").hidden=!layoutChanged();
+  fitLayoutPreview();
+}
+addEventListener("resize",()=>fitLayoutPreview());
 
 function teamList(){
   const people=S.users.filter(u=>u.tenant_id===S.tenant?.id);
@@ -536,8 +600,8 @@ function drawDocEditor(){
     <div class="field"><label for="d-status">Status</label><select class="input" id="d-status" data-d="status">${(isQ?QUOTE_STATUS:INVOICE_STATUS).map(x=>`<option ${x===d.status?"selected":""}>${x}</option>`).join("")}</select><span class="hint">Shown as ${pill(status)}${isQ?"":" — paid and overdue are worked out from payments and the due date."}</span></div>
   </div>
   <h3 class="sub-head">Line items</h3>
-  <div class="table-wrap"><table class="items"><thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th><th></th></tr></thead><tbody>
-  ${d.items.map((it,i)=>`<tr><td><input class="input" id="it-desc-${i}" data-it="${i}:desc" value="${esc(it.desc)}" placeholder="Item or service" aria-label="Description"></td><td><input class="input qty num" id="it-qty-${i}" type="number" step="any" data-it="${i}:qty" value="${esc(it.qty)}" aria-label="Quantity"></td><td><input class="input rate num" id="it-rate-${i}" type="number" step="any" data-it="${i}:rate" value="${esc(it.rate)}" aria-label="Rate"></td><td class="r num" data-amt="${i}">${money(num(it.qty)*num(it.rate))}</td><td>${d.items.length>1?`<button type="button" class="btn ghost sm" data-del-item="${i}" aria-label="Remove line">✕</button>`:""}</td></tr>`).join("")}
+  <div class="table-wrap"><table class="items"><thead><tr><th>Description</th>${savedLayout().showHsn?"<th>HSN/SAC</th>":""}<th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th><th></th></tr></thead><tbody>
+  ${d.items.map((it,i)=>`<tr><td><input class="input" id="it-desc-${i}" data-it="${i}:desc" value="${esc(it.desc)}" placeholder="Item or service" aria-label="Description"></td>${savedLayout().showHsn?`<td><input class="input hsn" id="it-hsn-${i}" data-it="${i}:hsn" value="${esc(it.hsn||"")}" placeholder="e.g. 998314" aria-label="HSN/SAC code"></td>`:""}<td><input class="input qty num" id="it-qty-${i}" type="number" step="any" data-it="${i}:qty" value="${esc(it.qty)}" aria-label="Quantity"></td><td><input class="input rate num" id="it-rate-${i}" type="number" step="any" data-it="${i}:rate" value="${esc(it.rate)}" aria-label="Rate"></td><td class="r num" data-amt="${i}">${money(num(it.qty)*num(it.rate))}</td><td>${d.items.length>1?`<button type="button" class="btn ghost sm" data-del-item="${i}" aria-label="Remove line">✕</button>`:""}</td></tr>`).join("")}
   </tbody></table></div>
   <button type="button" class="btn sm" data-add-item style="margin-top:8px">+ Add line</button>
   <div class="totals" id="d-totals">${totalsHtml(d)}</div>
@@ -574,17 +638,21 @@ function paymentsHtml(d){
   ${d.payments.length?`<div class="table-wrap"><table class="items"><thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Recorded by</th><th class="r">Amount</th><th></th></tr></thead><tbody>${d.payments.map((p,i)=>`<tr><td>${fmtDate(p.date)}</td><td>${esc(p.method)}</td><td>${esc(p.ref||"")}</td><td>${esc(userName(p.by))}</td><td class="r num">${money(p.amount)}</td><td><button type="button" class="btn ghost sm" data-del-pay="${i}" aria-label="Remove payment">✕</button></td></tr>`).join("")}</tbody></table></div>`:`<p class="hint">No payments recorded.</p>`}
   ${t.balance>0?`<div class="form" style="margin-top:10px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))"><div class="field"><label for="p-date">Date</label><input class="input" type="date" id="p-date" value="${todayISO()}"></div><div class="field"><label for="p-amount">Amount</label><input class="input num" type="number" step="any" id="p-amount" value="${t.balance.toFixed(2)}"></div><div class="field"><label for="p-method">Method</label><select class="input" id="p-method">${PAY_METHODS.map(m=>`<option>${m}</option>`).join("")}</select></div><div class="field"><label for="p-ref">Reference</label><input class="input" id="p-ref" placeholder="Optional"></div></div><button type="button" class="btn sm" data-act="add-payment" style="margin-top:8px">Record payment</button>`:""}`;
 }
-function docPaper(col,d){
-  const isQ=col==="quotes", s=S.settings, c=byId("clients",d.client_id)||{};
-  const ml=v=>esc(v||"").replace(/\n/g,"<br>");
-  return `<div class="docpaper"><div class="dp-top"><div>${s.logo?`<img class="dp-logo" src="${esc(s.logo)}" alt="">`:""}<h3>${esc(s.companyName||"Your company")}</h3><div class="muted">${ml(s.address)}${s.email?"<br>"+esc(s.email):""}${s.phone?"<br>"+esc(s.phone):""}${s.website?"<br>"+esc(s.website):""}${s.taxId?"<br>GSTIN: "+esc(s.taxId):""}</div></div>
-  <div style="text-align:right"><h3 class="dp-title">${isQ?"Quotation":"Invoice"}</h3><div class="mono">${esc(d.number)}</div><div class="muted">Date: ${fmtDate(d.date)}<br>${isQ?"Valid until: "+fmtDate(d.valid_until):"Due: "+fmtDate(d.due_date)}${d.ref?"<br>Ref: "+esc(d.ref):""}</div></div></div>
-  <div style="margin-bottom:20px"><div class="lbl">${isQ?"Prepared for":"Bill to"}</div><strong>${esc(c.company||c.name||"—")}</strong><div>${c.company&&c.name?esc(c.name)+"<br>":""}${ml(c.address)}${c.tax_id?"<br>GSTIN: "+esc(c.tax_id):""}</div></div>
-  ${d.title?`<p><strong>${esc(d.title)}</strong></p>`:""}
-  <table><thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead><tbody>${d.items.filter(i=>i.desc||num(i.rate)).map(i=>`<tr><td>${esc(i.desc)}</td><td class="r num">${num(i.qty)}</td><td class="r num">${money(i.rate)}</td><td class="r num">${money(num(i.qty)*num(i.rate))}</td></tr>`).join("")}</tbody></table>
-  <div class="totals">${totalsHtml(d)}</div>
-  ${!isQ&&s.bank?`<div style="margin-top:22px"><div class="lbl">Payment details</div>${ml(s.bank)}</div>`:""}
-  ${d.notes?`<div style="margin-top:18px"><div class="lbl">Notes</div>${ml(d.notes)}</div>`:""}</div>`;
+// The company's saved document layout (Settings → Documents), or the unsaved draft while editing it.
+const savedLayout = () => ({...DocTemplates.LAYOUT_DEFAULTS,...(S.settings.docLayout||{})});
+function docModel(col,d){
+  const isQ=col==="quotes", s=S.settings, c=byId("clients",d.client_id)||d._client||{};
+  const items=(d.items||[]).filter(i=>i.desc||num(i.rate)).map(i=>({desc:i.desc,hsn:i.hsn||"",qty:num(i.qty),rate:num(i.rate),amount:num(i.qty)*num(i.rate)}));
+  return { kind:isQ?"quotation":"invoice", number:d.number||"", date:fmtDate(d.date), secondDate:fmtDate(isQ?d.valid_until:d.due_date),
+    ref:d.ref||"", subject:d.title||"", notes:d.notes||"", bank:s.bank||"", currency:cur(), money, brandColor:s.brandColor||"",
+    seller:{name:s.companyName||"Your company",logo:s.logo,address:s.address,email:s.email,phone:s.phone,website:s.website,gstin:s.taxId},
+    buyer:{name:c.company||c.name||"—",contact:c.name,address:c.address,gstin:c.tax_id},
+    items, totals:{...totals(d),taxRate:num(d.tax_rate)} };
+}
+function docPaper(col,d,layout){ return DocTemplates.render(docModel(col,d),layout||savedLayout()); }
+function setPageSize(layout){
+  let st=document.getElementById("page-size"); if(!st){ st=document.createElement("style"); st.id="page-size"; document.head.appendChild(st); }
+  st.textContent=`@page{size:${layout.paper==="Letter"?"letter":"A4"};margin:10mm}`;
 }
 function syncDocTotals(){
   const d=S.sheet.doc;
@@ -592,7 +660,7 @@ function syncDocTotals(){
   const tt=$("#d-totals"); if(tt) tt.innerHTML=totalsHtml(d);
 }
 function docBody(d){
-  const items=d.items.filter(i=>i.desc||num(i.rate)).map(i=>({desc:i.desc,qty:num(i.qty),rate:num(i.rate)}));
+  const items=d.items.filter(i=>i.desc||num(i.rate)).map(i=>({desc:i.desc,...(i.hsn?{hsn:String(i.hsn).trim()}:{}),qty:num(i.qty),rate:num(i.rate)}));
   const out={number:d.number,client_id:d.client_id||null,project_id:d.project_id||null,title:d.title||"",ref:d.ref||"",date:d.date,status:d.status,items,
     discount:num(d.discount),tax_rate:num(d.tax_rate),notes:d.notes||""};
   if(d.valid_until!==undefined) out.valid_until=d.valid_until;
@@ -620,7 +688,7 @@ function exportCsv(col){
 
 /* ---------- events ---------- */
 document.addEventListener("click",async e=>{
-  const el=e.target.closest("[data-go],[data-go-detail],[data-open],[data-act],[data-close],[data-mode],[data-tab],[data-stab],[data-add-item],[data-del-item],[data-del-pay],[data-user-role],[data-user-active],[data-user-reset],[data-tenant-open],[data-tenant-active]");
+  const el=e.target.closest("[data-go],[data-go-detail],[data-open],[data-act],[data-close],[data-mode],[data-tab],[data-stab],[data-add-item],[data-del-item],[data-del-pay],[data-user-role],[data-user-active],[data-user-reset],[data-tenant-open],[data-tenant-active],[data-tpl],[data-lkind]");
   if(!el) return;
   if(el.dataset.go){ e.preventDefault(); closeSheet(); return go(el.dataset.go); }
   if(el.dataset.goDetail){ e.preventDefault(); const [v,id]=el.dataset.goDetail.split(":"); closeSheet(); return go(v,Number(id)); }
@@ -633,6 +701,11 @@ document.addEventListener("click",async e=>{
   if(el.dataset.delItem){ S.sheet.doc.items.splice(+el.dataset.delItem,1); return drawDocEditor(); }
   if(el.dataset.delPay){ const d=S.sheet.doc; d.payments.splice(+el.dataset.delPay,1);
     const rec=await update("invoices",S.sheet.id,{...docBody(d),_activity:`Removed a payment from ${d.number}`}); if(rec){ toast("Payment removed"); S.sheet.doc=JSON.parse(JSON.stringify(rec)); S.sheet.payReset=true; drawDocEditor(); } return; }
+  if(el.dataset.tpl){ layoutDraft().template=el.dataset.tpl;
+    // the GST format reads best with its usual Indian defaults switched on
+    if(el.dataset.tpl==="gst"){ Object.assign(layoutDraft(),{showHsn:true,showWords:true,taxDisplay:layoutDraft().taxDisplay==="single"?"cgst_sgst":layoutDraft().taxDisplay}); return render(); }
+    return updateLayoutPreview(); }
+  if(el.dataset.lkind){ S.layoutKind=el.dataset.lkind; return render(); }
   if(el.dataset.tenantOpen) return switchTenant(+el.dataset.tenantOpen);
   if(el.dataset.tenantActive){ const t=S.tenants.find(x=>x.id===+el.dataset.tenantActive);
     if(t.active&&!await confirmBox(`Disable ${t.name}?`,"Everyone in this company is signed out and can't sign in until you enable it again. Their data is kept.","Disable")) return;
@@ -645,6 +718,8 @@ document.addEventListener("click",async e=>{
     if(!await confirmBox(`Reset ${u.name}'s password?`,`Their new password will be: ${pw}  Write it down and share it with them before confirming.`,"Reset password")) return;
     try{ await api("PUT","/api/admin/users/"+u.id,{password:pw}); toast("Password reset"); }catch(err){ toast(err.message); } return; }
   const a=el.dataset.act;
+  if(a==="save-layout"){ try{ S.settings=await api("PUT","/api/settings",{docLayout:layoutDraft()}); S.layoutDraft=null; render(); toast("Layout saved. New and existing documents use it."); }catch(err){ toast(err.message); } return; }
+  if(a==="reset-layout"){ S.layoutDraft={...DocTemplates.LAYOUT_DEFAULTS}; return render(); }
   if(a==="refresh"){ el.disabled=true; try{ await loadAll(); toast("Up to date"); }catch(err){ toast(err.message); } finally{ el.disabled=false; } return; }
   if(a==="logout"){ try{ await api("POST","/api/logout"); }catch(_){} location.reload(); return; }
   if(a==="new-lead") return openRecord("leads");
@@ -675,19 +750,29 @@ document.addEventListener("click",async e=>{
     const inv={number:nextNumber("invoices",s.invoicePrefix||"INV-"),client_id:q.client_id,project_id:q.project_id,title:q.title,ref:q.ref,date:todayISO(),due_date:addDays(todayISO(),num(s.paymentDays??14)),status:"Draft",items:q.items,discount:q.discount,tax_rate:q.tax_rate,notes:q.notes,payments:[],from_quote:S.sheet.id};
     const rec=await create("invoices",docBody(inv));
     if(rec){ await update("quotes",S.sheet.id,{status:"Accepted",invoice_id:rec.id,_activity:`Converted ${q.number} to invoice ${rec.number}`}); toast(`Invoice ${rec.number} created`); openDocEditor("invoices",rec.id); } return; }
-  if(a==="print-doc"){ S.sheet.tab="preview"; drawDocEditor(); document.body.classList.add("printing"); setTimeout(()=>{ window.print(); document.body.classList.remove("printing"); },50); return; }
+  if(a==="print-doc"){ setPageSize(savedLayout()); S.sheet.tab="preview"; drawDocEditor(); document.body.classList.add("printing"); setTimeout(()=>{ window.print(); document.body.classList.remove("printing"); },50); return; }
   if(a==="download-doc"){ const {col,doc}=S.sheet;
     const css=await fetch("/app.css").then(r=>r.text()).catch(()=>"");
-    const page=`<!doctype html><html><head><meta charset="utf-8"><title>${esc(doc.number)}</title><style>${css}\nbody{background:#fff;padding:32px}.docpaper{max-width:820px;margin:auto;border:0}:root{--accent:${esc(S.settings.brandColor||"#1d6b57")}}</style></head><body>${docPaper(col,doc)}</body></html>`;
+    const page=`<!doctype html><html><head><meta charset="utf-8"><title>${esc(doc.number)}</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700;800&family=Source+Serif+4:wght@300;400;600;700&display=swap"><style>${css}\nbody{background:#fff;padding:24px}.doc{max-width:794px;margin:auto;border:0}@page{size:${savedLayout().paper==="Letter"?"letter":"A4"};margin:10mm}@media print{body{padding:0}}</style></head><body>${docPaper(col,doc)}</body></html>`;
     return saveFile(`${doc.number}.html`,page,"text/html"); }
 });
 
 function trackDirty(el){
+  if(el.dataset.l||el.dataset.lPick) return; // layout editor keeps its own draft
   if(el.id&&el.type!=="file"&&el.dataset.search==null&&!["tenant-switch","lead-region","task-filter"].includes(el.id)&&$("#main")?.contains(el)) S.dirty[el.id]=el.value;
 }
 function clearDirty(form){ for(const el of form.elements) delete S.dirty[el.id]; }
+function layoutInput(el){
+  const L=layoutDraft();
+  if(el.dataset.lPick){ L[el.dataset.lPick]=el.value; const t=document.getElementById("L-"+el.dataset.lPick); if(t) t.value=el.value; }
+  else if(el.type==="checkbox") L[el.dataset.l]=el.checked;
+  else L[el.dataset.l]=el.value;
+  if(el.dataset.l==="accent"&&!/^#[0-9a-f]{6}$/i.test(el.value)&&el.value!=="") return; // wait for a full hex value
+  updateLayoutPreview();
+}
 document.addEventListener("input",e=>{
   const el=e.target;
+  if(el.dataset.l||el.dataset.lPick) return layoutInput(el);
   trackDirty(el);
   if(el.dataset.search!=null){ S.q[el.dataset.search]=el.value; return render(); }
   if(el.dataset.d&&S.sheet?.doc){ S.sheet.doc[el.dataset.d]=el.hasAttribute("data-num")?(Number(el.value)||null):el.value; if(["discount","tax_rate"].includes(el.dataset.d)) syncDocTotals(); return; }
@@ -696,6 +781,7 @@ document.addEventListener("input",e=>{
 });
 document.addEventListener("change",async e=>{
   const el=e.target;
+  if(el.dataset.l||el.dataset.lPick) return layoutInput(el);
   trackDirty(el);
   if(el.id==="task-filter"){ S.taskFilter=el.value; return render(); }
   if(el.id==="lead-region"){ S.leadRegion=el.value; return render(); }
@@ -740,7 +826,7 @@ document.addEventListener("submit",async e=>{
 });
 
 async function switchTenant(id){
-  try{ await api("POST","/api/admin/switch",{tenant_id:id}); closeSheet(); S.leadRegion=""; await loadAll(); go(S.view==="settings"?"settings":"overview"); toast(`Now working in ${S.tenant?.name||"that company"}`); }
+  try{ await api("POST","/api/admin/switch",{tenant_id:id}); S.layoutDraft=null; closeSheet(); S.leadRegion=""; await loadAll(); go(S.view==="settings"?"settings":"overview"); toast(`Now working in ${S.tenant?.name||"that company"}`); }
   catch(err){ toast(err.message); }
 }
 

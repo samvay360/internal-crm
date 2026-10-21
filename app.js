@@ -78,7 +78,7 @@ const LINKS = { client_id: "clients", project_id: "projects", owner_id: "users",
 const DEFAULT_SETTINGS = {
   companyName: "", email: "", phone: "", taxId: "", address: "", website: "",
   currency: "INR", taxRate: 18, quotePrefix: "QT-", invoicePrefix: "INV-", paymentDays: 14, quoteDays: 30,
-  bank: "", terms: "", logo: "", brandColor: "",
+  bank: "", terms: "", logo: "", brandColor: "", docLayout: {},
   regions: ["North", "South", "East", "West", "Central"],
   leadSources: ["Website", "Referral", "Social media", "Cold outreach", "Event", "Advertising", "Other"],
 };
@@ -145,6 +145,27 @@ CREATE INDEX IF NOT EXISTS activity_tenant ON activity (tenant_id, entity, entit
 }
 let ready = null;
 const ensureReady = () => (ready ??= migrate().catch(e => { ready = null; throw e; }));
+
+// Quotation/invoice layout chosen in Settings → Documents. Only known options are stored.
+const LAYOUT_SPEC = {
+  template: ["classic", "band", "minimal", "gst"], font: ["sans", "serif", "plain"], paper: ["A4", "Letter"],
+  taxDisplay: ["single", "cgst_sgst", "igst"],
+  invoiceTitle: 60, quoteTitle: 60, signatureLabel: 80, footer: 300,
+  showLogo: true, showSellerGstin: true, showBuyerGstin: true, showHsn: true,
+  showWords: true, showBank: true, showNotes: true, showSignature: true,
+};
+function cleanLayout(v) {
+  const out = {};
+  if (!v || typeof v !== "object") return out;
+  for (const [k, spec] of Object.entries(LAYOUT_SPEC)) {
+    if (!(k in v)) continue;
+    if (Array.isArray(spec)) { if (spec.includes(v[k])) out[k] = v[k]; }
+    else if (typeof spec === "number") out[k] = String(v[k] ?? "").slice(0, spec);
+    else out[k] = !!v[k];
+  }
+  if (typeof v.accent === "string" && /^(#[0-9a-f]{6})?$/i.test(v.accent)) out.accent = v.accent;
+  return out;
+}
 
 /* ---------- helpers ---------- */
 function now() { return new Date().toISOString(); }
@@ -361,6 +382,7 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
     if (key === "logo" && v && !/^data:image\/(png|jpeg|webp|svg\+xml);base64,/.test(v)) throw httpError(400, "Logo must be a PNG, JPG, WebP or SVG image.");
     if (key === "logo" && v && v.length > 1_500_000) throw httpError(400, "Logo is too large. Use an image under 1 MB.");
     if (key === "brandColor" && v && !/^#[0-9a-f]{6}$/i.test(v)) throw httpError(400, "Brand colour must be a hex value like #b8652c.");
+    if (key === "docLayout") v = cleanLayout(v);
     if (Array.isArray(DEFAULT_SETTINGS[key])) v = (Array.isArray(v) ? v : []).map(s => String(s).trim()).filter(Boolean).slice(0, 200);
     await putSetting(req.tenantId, key, v);
   }
