@@ -21,7 +21,8 @@ const S = {
   settings:{}, users:[], me:null, activity:[],
   view:"overview", param:null, q:{}, mode:{leads:"board",tasks:"board"},
   taskFilter:"all", leadRegion:"", settingsTab:"company", sheet:null,
-  tenant:null, tenants:[], allUsers:[]
+  tenant:null, tenants:[], allUsers:[],
+  dirty:{}, dirtyKey:""   // what the viewer has typed into page forms, kept across redraws
 };
 try{ const m=JSON.parse(localStorage.getItem("crm.mode")||"null"); if(m) Object.assign(S.mode,m); }catch(e){}
 
@@ -214,10 +215,17 @@ let queued=false;
 function render(){ if(queued||!$("#main")) return; queued=true; requestAnimationFrame(()=>{ queued=false; doRender(); }); }
 function doRender(){
   renderRail();
-  const active=document.activeElement, activeId=active?.id, sel=active?.selectionStart;
+  const main=$("#main");
+  const active=document.activeElement, activeId=main.contains(active)?active.id:null;
+  let selStart=null, selEnd=null; try{ selStart=active.selectionStart; selEnd=active.selectionEnd; }catch(e){}
+  // typed-in values belong to one page of one company; forget them when either changes
+  const key=[S.view,S.param,S.settingsTab,S.tenant?.id].join("|");
+  if(key!==S.dirtyKey){ S.dirty={}; S.dirtyKey=key; }
   const views={overview:viewOverview,leads:viewLeads,clients:viewClients,projects:viewProjects,tasks:viewTasks,quotes:()=>viewDocs("quotes"),invoices:()=>viewDocs("invoices"),settings:viewSettings,client:viewClient,project:viewProject};
-  $("#main").innerHTML=(views[S.view]||viewOverview)();
-  if(activeId&&active.dataset.search!=null){ const el=document.getElementById(activeId); if(el){ el.focus(); try{el.setSelectionRange(sel,sel);}catch(e){} } }
+  main.innerHTML=(views[S.view]||viewOverview)();
+  // a redraw (e.g. the 30-second refresh) must not wipe what the viewer is typing
+  for(const [id,v] of Object.entries(S.dirty)){ const el=document.getElementById(id); if(el&&main.contains(el)) el.value=v; }
+  if(activeId){ const el=document.getElementById(activeId); if(el){ el.focus({preventScroll:true}); if(selStart!=null) try{ el.setSelectionRange(selStart,selEnd); }catch(e){} } }
 }
 
 /* ---------- overview ---------- */
@@ -669,8 +677,13 @@ document.addEventListener("click",async e=>{
     return saveFile(`${doc.number}.html`,page,"text/html"); }
 });
 
+function trackDirty(el){
+  if(el.id&&el.type!=="file"&&el.dataset.search==null&&!["tenant-switch","lead-region","task-filter"].includes(el.id)&&$("#main")?.contains(el)) S.dirty[el.id]=el.value;
+}
+function clearDirty(form){ for(const el of form.elements) delete S.dirty[el.id]; }
 document.addEventListener("input",e=>{
   const el=e.target;
+  trackDirty(el);
   if(el.dataset.search!=null){ S.q[el.dataset.search]=el.value; return render(); }
   if(el.dataset.d&&S.sheet?.doc){ S.sheet.doc[el.dataset.d]=el.hasAttribute("data-num")?(Number(el.value)||null):el.value; if(["discount","tax_rate"].includes(el.dataset.d)) syncDocTotals(); return; }
   if(el.dataset.it&&S.sheet?.doc){ const [i,k]=el.dataset.it.split(":"); S.sheet.doc.items[+i][k]=el.value; return syncDocTotals(); }
@@ -678,6 +691,7 @@ document.addEventListener("input",e=>{
 });
 document.addEventListener("change",async e=>{
   const el=e.target;
+  trackDirty(el);
   if(el.id==="task-filter"){ S.taskFilter=el.value; return render(); }
   if(el.id==="lead-region"){ S.leadRegion=el.value; return render(); }
   if(el.id==="tenant-switch") return switchTenant(+el.value);
@@ -706,17 +720,17 @@ document.addEventListener("submit",async e=>{
       body[k]=["regions","leadSources"].includes(k)?el.value.split("\n").map(x=>x.trim()).filter(Boolean):el.type==="number"?num(el.value):el.value.trim();
     }
     if("currency" in body){ body.currency=body.currency.toUpperCase(); try{ new Intl.NumberFormat(undefined,{style:"currency",currency:body.currency}); }catch(_){ toast(`"${body.currency}" is not a currency code. Use 3 letters, such as USD or LKR.`); return; } }
-    try{ S.settings=await api("PUT","/api/settings",body); applyBrand(S.settings); render(); toast("Settings saved"); }catch(err){ toast(err.message); }
+    try{ S.settings=await api("PUT","/api/settings",body); clearDirty(form); applyBrand(S.settings); render(); toast("Settings saved"); }catch(err){ toast(err.message); }
   }
   if(form.id==="new-user-form"){
-    try{ await api("POST","/api/admin/users",{name:$("#u-name").value,email:$("#u-email").value,password:$("#u-pass").value,role:$("#u-role").value,tenant_id:+$("#u-tenant").value}); await loadAll(); toast("Account created"); }catch(err){ toast(err.message); }
+    try{ await api("POST","/api/admin/users",{name:$("#u-name").value,email:$("#u-email").value,password:$("#u-pass").value,role:$("#u-role").value,tenant_id:+$("#u-tenant").value}); clearDirty(form); await loadAll(); toast("Account created"); }catch(err){ toast(err.message); }
   }
   if(form.id==="new-tenant-form"){
-    try{ await api("POST","/api/admin/tenants",{name:$("#t-name").value}); await loadAdmin(); render(); toast("Company added"); }catch(err){ toast(err.message); }
+    try{ await api("POST","/api/admin/tenants",{name:$("#t-name").value}); clearDirty(form); await loadAdmin(); render(); toast("Company added"); }catch(err){ toast(err.message); }
   }
   if(form.id==="account-form"){
     const body={name:$("#m-name").value}; if($("#m-new").value){ body.password=$("#m-new").value; body.currentPassword=$("#m-cur").value; }
-    try{ await api("PUT","/api/me",body); await loadAll(); toast("Account saved"); }catch(err){ toast(err.message); }
+    try{ await api("PUT","/api/me",body); clearDirty(form); await loadAll(); toast("Account saved"); }catch(err){ toast(err.message); }
   }
 });
 
