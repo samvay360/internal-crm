@@ -339,6 +339,37 @@ td.r,th.r{text-align:right}
   .search{width:100%}
   .form{grid-template-columns:1fr}
 }
+@media (max-width:640px){
+  main{padding-block:16px 40px}
+  .head{align-items:stretch}
+  .head>.toolbar,.head .toolbar{width:100%}
+  .head .toolbar>.btn,.head .toolbar>.seg{flex:1 1 auto;text-align:center}
+  .btn{padding:11px 14px}.btn.sm{padding:8px 12px}
+  .nav-btn{padding:11px 12px}
+  /* 16px inputs stop iOS zooming the page on focus */
+  .input,.seg button{font-size:16px}
+  .seg button{padding:10px 12px}
+  .kpis{grid-template-columns:1fr 1fr;gap:10px}
+  .kpi{padding:12px 14px}.kpi .value{font-size:20px}
+  .grid2{grid-template-columns:minmax(0,1fr)}
+  .list-plain li{padding:12px 14px}
+  .board{grid-auto-columns:82%;scroll-snap-type:x mandatory;margin-inline:-4px;padding-inline:4px}
+  .col{scroll-snap-align:start}
+  /* tables turn into stacked cards; JS copies each column heading into data-label */
+  .table-wrap table,.table-wrap tbody,.table-wrap tr,.table-wrap td{display:block;width:100%}
+  .table-wrap thead{display:none}
+  .table-wrap tr{padding:10px 14px;border-bottom:1px solid var(--line)}
+  .table-wrap tbody tr:last-child{border-bottom:0}
+  .table-wrap td{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:4px 0;border:0;text-align:right}
+  .table-wrap td::before{content:attr(data-label);flex:none;font-family:var(--font-num);font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);text-align:left}
+  .table-wrap td:first-child{display:block;text-align:left;font-size:15px}
+  .table-wrap td:first-child::before,.table-wrap td:not([data-label])::before,.table-wrap td[data-label=""]::before{display:none}
+  .sheet,.sheet.wide{width:100%;border-left:0}
+  .sheet-head{padding:14px 16px}.sheet-body{padding:16px}
+  .sheet-foot{padding:12px 16px;position:sticky;bottom:0;padding-bottom:max(12px,env(safe-area-inset-bottom,0px))}
+  .toast{bottom:max(20px,env(safe-area-inset-bottom,0px))}
+  .auth-box{padding:22px}
+}
 @media (prefers-reduced-motion:no-preference){.sheet{animation:slide .2s ease-out}@keyframes slide{from{transform:translateX(24px);opacity:.6}}}
 
 @media print{

@@ -223,6 +223,9 @@ function doRender(){
   if(key!==S.dirtyKey){ S.dirty={}; S.dirtyKey=key; }
   const views={overview:viewOverview,leads:viewLeads,clients:viewClients,projects:viewProjects,tasks:viewTasks,quotes:()=>viewDocs("quotes"),invoices:()=>viewDocs("invoices"),expenses:viewExpenses,settings:viewSettings,client:viewClient,project:viewProject};
   main.innerHTML=(views[S.view]||viewOverview)();
+  // label each table cell with its column heading so the phone layout can show it as a stacked card
+  main.querySelectorAll(".table-wrap table").forEach(t=>{ const heads=[...t.querySelectorAll("thead th")].map(th=>th.textContent.trim());
+    t.querySelectorAll("tbody tr").forEach(tr=>[...tr.children].forEach((td,i)=>{ if(heads[i]) td.dataset.label=heads[i]; })); });
   // a redraw (e.g. the 30-second refresh) must not wipe what the viewer is typing
   for(const [id,v] of Object.entries(S.dirty)){ const el=document.getElementById(id); if(el&&main.contains(el)) el.value=v; }
   fitLayoutPreview();
