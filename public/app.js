@@ -21,7 +21,8 @@ const S = {
   settings:{}, users:[], me:null, activity:[],
   view:"overview", param:null, q:{}, mode:{leads:"board",tasks:"board"},
   taskFilter:"all", leadRegion:"", settingsTab:"company", sheet:null,
-  tenant:null, tenants:[], allUsers:[]
+  tenant:null, tenants:[], allUsers:[],
+  dirty:{}, dirtyKey:""   // what the viewer has typed into page forms, kept across redraws
 };
 try{ const m=JSON.parse(localStorage.getItem("crm.mode")||"null"); if(m) Object.assign(S.mode,m); }catch(e){}
 
@@ -85,6 +86,7 @@ async function remove(col,id){
 }
 async function loadAll(){
   const b=await api("GET","/api/bootstrap");
+  S.loadedAt=new Date();
   S.me=b.me; S.tenant=b.tenant; S.settings=b.settings; S.users=b.users; S.data=b.data;
   if(isSuper()) await loadAdmin();
   applyBrand(S.settings);
@@ -154,7 +156,6 @@ async function start(){
   if(st.needsSetup) return showSetup(st);
   if(!st.user) return showAuth(st);
   showApp(); await loadAll();
-  setInterval(()=>{ if(document.visibilityState==="visible") loadAll().catch(()=>{}); },30000);
 }
 function authShell(st,inner){
   $("#root").innerHTML=`<div class="auth"><form class="auth-box" id="auth-form" novalidate>${st?.logo?`<img class="auth-logo" src="${esc(st.logo)}" alt="">`:""}${inner}<div class="error" id="auth-error" role="alert"></div></form></div>`;
@@ -201,7 +202,7 @@ function renderRail(){
   $("#rail").innerHTML=`<div class="brand">${brandMark(S.settings)}<span class="brand-name">${wordmark((S.settings.companyName||"").toUpperCase())}<small>CRM</small></span></div>`+
     NAV.map(n=>n[0]==="sep"?`<div class="nav-sep"></div>`:
       `<button class="nav-btn" data-go="${n[0]}" ${parent===n[0]?'aria-current="page"':""}><span>${n[1]}</span>${c[n[0]]!=null?`<span class="count">${c[n[0]]}</span>`:""}</button>`).join("")+
-    `<div class="rail-foot">${isSuper()&&S.tenants.length?`<label class="label-mono" for="tenant-switch">Working in</label><select class="input" id="tenant-switch" aria-label="Switch company">${S.tenants.map(t=>`<option value="${t.id}" ${t.id===S.tenant?.id?"selected":""}>${esc(t.name)}${t.active?"":" (disabled)"}</option>`).join("")}</select>`:""}<span>${esc(S.me?.name||"")} <span class="tag">${roleLabel(S.me?.role)}</span></span><button data-act="logout">Sign out</button></div>`;
+    `<div class="rail-foot">${isSuper()&&S.tenants.length?`<label class="label-mono" for="tenant-switch">Working in</label><select class="input" id="tenant-switch" aria-label="Switch company">${S.tenants.map(t=>`<option value="${t.id}" ${t.id===S.tenant?.id?"selected":""}>${esc(t.name)}${t.active?"":" (disabled)"}</option>`).join("")}</select>`:""}<span>${esc(S.me?.name||"")} <span class="tag">${roleLabel(S.me?.role)}</span></span><button data-act="refresh" title="Load the latest changes made by your team">↻ Refresh</button><span class="cell-sub" id="loaded-at">${S.loadedAt?"Updated "+S.loadedAt.toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}):""}</span><button data-act="logout">Sign out</button></div>`;
 }
 function head(title,sub,actions=""){
   return `<div class="head"><div><h1>${esc(title)}</h1>${sub?`<p>${sub}</p>`:""}</div><div class="toolbar">${actions}</div></div>`;
@@ -214,10 +215,17 @@ let queued=false;
 function render(){ if(queued||!$("#main")) return; queued=true; requestAnimationFrame(()=>{ queued=false; doRender(); }); }
 function doRender(){
   renderRail();
-  const active=document.activeElement, activeId=active?.id, sel=active?.selectionStart;
+  const main=$("#main");
+  const active=document.activeElement, activeId=main.contains(active)?active.id:null;
+  let selStart=null, selEnd=null; try{ selStart=active.selectionStart; selEnd=active.selectionEnd; }catch(e){}
+  // typed-in values belong to one page of one company; forget them when either changes
+  const key=[S.view,S.param,S.tenant?.id].join("|");
+  if(key!==S.dirtyKey){ S.dirty={}; S.dirtyKey=key; }
   const views={overview:viewOverview,leads:viewLeads,clients:viewClients,projects:viewProjects,tasks:viewTasks,quotes:()=>viewDocs("quotes"),invoices:()=>viewDocs("invoices"),settings:viewSettings,client:viewClient,project:viewProject};
-  $("#main").innerHTML=(views[S.view]||viewOverview)();
-  if(activeId&&active.dataset.search!=null){ const el=document.getElementById(activeId); if(el){ el.focus(); try{el.setSelectionRange(sel,sel);}catch(e){} } }
+  main.innerHTML=(views[S.view]||viewOverview)();
+  // a redraw (e.g. the 30-second refresh) must not wipe what the viewer is typing
+  for(const [id,v] of Object.entries(S.dirty)){ const el=document.getElementById(id); if(el&&main.contains(el)) el.value=v; }
+  if(activeId){ const el=document.getElementById(activeId); if(el){ el.focus({preventScroll:true}); if(selStart!=null) try{ el.setSelectionRange(selStart,selEnd); }catch(e){} } }
 }
 
 /* ---------- overview ---------- */
@@ -546,11 +554,15 @@ function drawDocEditor(){
     if(isQ&&d.invoice_id&&byId("invoices",d.invoice_id)) actions.push(`<button type="button" class="btn" data-open="invoices:${d.invoice_id}">View invoice</button>`);
     actions.push(`<button type="button" class="btn" data-act="print-doc">Print / PDF</button><button type="button" class="btn" data-act="download-doc">Download</button>`);
   }
+  const PAY=["p-date","p-amount","p-method","p-ref"], keep={};
+  if(!S.sheet.payReset) for(const id of PAY){ const el=document.getElementById(id); if(el) keep[id]=el.value; }
+  S.sheet.payReset=false;
   if(!$("#overlay .sheet")) openSheet("",true);
   const sheet=$("#overlay .sheet"); sheet.classList.add("wide");
   sheet.innerHTML=`<div class="sheet-head"><h2><span class="mono">${esc(d.number)}</span> ${isNew?`<span class="cell-sub">new ${isQ?"quotation":"invoice"}</span>`:pill(status)}</h2><div class="toolbar"><div class="seg"><button type="button" data-tab="edit" aria-pressed="${tab==="edit"}">Edit</button><button type="button" data-tab="preview" aria-pressed="${tab==="preview"}">Preview</button></div><button type="button" class="btn ghost" data-close aria-label="Close">✕</button></div></div>
   <div class="sheet-body">${body}</div>
   <div class="sheet-foot"><div class="grp">${actions.join("")}</div><div class="grp"><button type="button" class="btn" data-close>Close</button><button type="button" class="btn primary" data-act="save-doc">${isNew?"Create":"Save changes"}</button></div></div>`;
+  for(const [id,v] of Object.entries(keep)){ const el=document.getElementById(id); if(el) el.value=v; }
 }
 function totalsHtml(d){
   const t=totals(d);
@@ -620,7 +632,7 @@ document.addEventListener("click",async e=>{
   if(el.hasAttribute("data-add-item")){ S.sheet.doc.items.push({desc:"",qty:1,rate:0}); drawDocEditor(); $(`#it-desc-${S.sheet.doc.items.length-1}`)?.focus(); return; }
   if(el.dataset.delItem){ S.sheet.doc.items.splice(+el.dataset.delItem,1); return drawDocEditor(); }
   if(el.dataset.delPay){ const d=S.sheet.doc; d.payments.splice(+el.dataset.delPay,1);
-    const rec=await update("invoices",S.sheet.id,{...docBody(d),_activity:`Removed a payment from ${d.number}`}); if(rec){ toast("Payment removed"); S.sheet.doc=JSON.parse(JSON.stringify(rec)); drawDocEditor(); } return; }
+    const rec=await update("invoices",S.sheet.id,{...docBody(d),_activity:`Removed a payment from ${d.number}`}); if(rec){ toast("Payment removed"); S.sheet.doc=JSON.parse(JSON.stringify(rec)); S.sheet.payReset=true; drawDocEditor(); } return; }
   if(el.dataset.tenantOpen) return switchTenant(+el.dataset.tenantOpen);
   if(el.dataset.tenantActive){ const t=S.tenants.find(x=>x.id===+el.dataset.tenantActive);
     if(t.active&&!await confirmBox(`Disable ${t.name}?`,"Everyone in this company is signed out and can't sign in until you enable it again. Their data is kept.","Disable")) return;
@@ -633,6 +645,7 @@ document.addEventListener("click",async e=>{
     if(!await confirmBox(`Reset ${u.name}'s password?`,`Their new password will be: ${pw}  Write it down and share it with them before confirming.`,"Reset password")) return;
     try{ await api("PUT","/api/admin/users/"+u.id,{password:pw}); toast("Password reset"); }catch(err){ toast(err.message); } return; }
   const a=el.dataset.act;
+  if(a==="refresh"){ el.disabled=true; try{ await loadAll(); toast("Up to date"); }catch(err){ toast(err.message); } finally{ el.disabled=false; } return; }
   if(a==="logout"){ try{ await api("POST","/api/logout"); }catch(_){} location.reload(); return; }
   if(a==="new-lead") return openRecord("leads");
   if(a==="new-client") return openRecord("clients");
@@ -657,7 +670,7 @@ document.addEventListener("click",async e=>{
     const d=S.sheet.doc; d.payments=[...d.payments,{date:$("#p-date").value||todayISO(),amount:amt,method:$("#p-method").value,ref:$("#p-ref").value.trim(),by:S.me.id}];
     if(d.status==="Draft") d.status="Sent";
     const rec=await update("invoices",S.sheet.id,{...docBody(d),_activity:`Recorded payment of ${money(amt)} on ${d.number}`});
-    if(rec){ toast("Payment recorded"); S.sheet.doc=JSON.parse(JSON.stringify(rec)); drawDocEditor(); } return; }
+    if(rec){ toast("Payment recorded"); S.sheet.doc=JSON.parse(JSON.stringify(rec)); S.sheet.payReset=true; drawDocEditor(); } return; }
   if(a==="quote-to-invoice"){ const q=S.sheet.doc, s=S.settings;
     const inv={number:nextNumber("invoices",s.invoicePrefix||"INV-"),client_id:q.client_id,project_id:q.project_id,title:q.title,ref:q.ref,date:todayISO(),due_date:addDays(todayISO(),num(s.paymentDays??14)),status:"Draft",items:q.items,discount:q.discount,tax_rate:q.tax_rate,notes:q.notes,payments:[],from_quote:S.sheet.id};
     const rec=await create("invoices",docBody(inv));
@@ -669,15 +682,21 @@ document.addEventListener("click",async e=>{
     return saveFile(`${doc.number}.html`,page,"text/html"); }
 });
 
+function trackDirty(el){
+  if(el.id&&el.type!=="file"&&el.dataset.search==null&&!["tenant-switch","lead-region","task-filter"].includes(el.id)&&$("#main")?.contains(el)) S.dirty[el.id]=el.value;
+}
+function clearDirty(form){ for(const el of form.elements) delete S.dirty[el.id]; }
 document.addEventListener("input",e=>{
   const el=e.target;
+  trackDirty(el);
   if(el.dataset.search!=null){ S.q[el.dataset.search]=el.value; return render(); }
   if(el.dataset.d&&S.sheet?.doc){ S.sheet.doc[el.dataset.d]=el.hasAttribute("data-num")?(Number(el.value)||null):el.value; if(["discount","tax_rate"].includes(el.dataset.d)) syncDocTotals(); return; }
   if(el.dataset.it&&S.sheet?.doc){ const [i,k]=el.dataset.it.split(":"); S.sheet.doc.items[+i][k]=el.value; return syncDocTotals(); }
-  if(el.id==="s-brandColor-pick"){ $("#s-brandColor").value=el.value; }
+  if(el.id==="s-brandColor-pick"){ $("#s-brandColor").value=el.value; trackDirty($("#s-brandColor")); }
 });
 document.addEventListener("change",async e=>{
   const el=e.target;
+  trackDirty(el);
   if(el.id==="task-filter"){ S.taskFilter=el.value; return render(); }
   if(el.id==="lead-region"){ S.leadRegion=el.value; return render(); }
   if(el.id==="tenant-switch") return switchTenant(+el.value);
@@ -706,17 +725,17 @@ document.addEventListener("submit",async e=>{
       body[k]=["regions","leadSources"].includes(k)?el.value.split("\n").map(x=>x.trim()).filter(Boolean):el.type==="number"?num(el.value):el.value.trim();
     }
     if("currency" in body){ body.currency=body.currency.toUpperCase(); try{ new Intl.NumberFormat(undefined,{style:"currency",currency:body.currency}); }catch(_){ toast(`"${body.currency}" is not a currency code. Use 3 letters, such as USD or LKR.`); return; } }
-    try{ S.settings=await api("PUT","/api/settings",body); applyBrand(S.settings); render(); toast("Settings saved"); }catch(err){ toast(err.message); }
+    try{ S.settings=await api("PUT","/api/settings",body); clearDirty(form); applyBrand(S.settings); render(); toast("Settings saved"); }catch(err){ toast(err.message); }
   }
   if(form.id==="new-user-form"){
-    try{ await api("POST","/api/admin/users",{name:$("#u-name").value,email:$("#u-email").value,password:$("#u-pass").value,role:$("#u-role").value,tenant_id:+$("#u-tenant").value}); await loadAll(); toast("Account created"); }catch(err){ toast(err.message); }
+    try{ await api("POST","/api/admin/users",{name:$("#u-name").value,email:$("#u-email").value,password:$("#u-pass").value,role:$("#u-role").value,tenant_id:+$("#u-tenant").value}); clearDirty(form); await loadAll(); toast("Account created"); }catch(err){ toast(err.message); }
   }
   if(form.id==="new-tenant-form"){
-    try{ await api("POST","/api/admin/tenants",{name:$("#t-name").value}); await loadAdmin(); render(); toast("Company added"); }catch(err){ toast(err.message); }
+    try{ await api("POST","/api/admin/tenants",{name:$("#t-name").value}); clearDirty(form); await loadAdmin(); render(); toast("Company added"); }catch(err){ toast(err.message); }
   }
   if(form.id==="account-form"){
     const body={name:$("#m-name").value}; if($("#m-new").value){ body.password=$("#m-new").value; body.currentPassword=$("#m-cur").value; }
-    try{ await api("PUT","/api/me",body); await loadAll(); toast("Account saved"); }catch(err){ toast(err.message); }
+    try{ await api("PUT","/api/me",body); clearDirty(form); await loadAll(); toast("Account saved"); }catch(err){ toast(err.message); }
   }
 });
 

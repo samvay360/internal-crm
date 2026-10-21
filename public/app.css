@@ -57,6 +57,8 @@ a{color:var(--accent)}
 .rail-foot button{background:none;border:1px solid var(--line-strong);color:var(--fg);border-radius:var(--r-sm);padding:7px 10px;cursor:pointer;text-align:center;
   font-family:var(--font-num);font-size:11px;text-transform:uppercase;letter-spacing:.08em}
 .rail-foot button:hover{border-color:var(--accent);color:var(--accent)}
+.rail-foot button:disabled{opacity:.5;cursor:wait}
+#loaded-at{text-align:center;margin-top:-4px}
 
 main{min-width:0;padding-block:28px 60px;padding-left:max(28px,env(safe-area-inset-left,0px));padding-right:max(28px,env(safe-area-inset-right,0px))}
 .head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:20px}
