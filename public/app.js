@@ -223,6 +223,9 @@ function doRender(){
   if(key!==S.dirtyKey){ S.dirty={}; S.dirtyKey=key; }
   const views={overview:viewOverview,leads:viewLeads,clients:viewClients,projects:viewProjects,tasks:viewTasks,quotes:()=>viewDocs("quotes"),invoices:()=>viewDocs("invoices"),expenses:viewExpenses,settings:viewSettings,client:viewClient,project:viewProject};
   main.innerHTML=(views[S.view]||viewOverview)();
+  // label each table cell with its column heading so the phone layout can show it as a stacked card
+  main.querySelectorAll(".table-wrap table").forEach(t=>{ const heads=[...t.querySelectorAll("thead th")].map(th=>th.textContent.trim());
+    t.querySelectorAll("tbody tr").forEach(tr=>[...tr.children].forEach((td,i)=>{ if(heads[i]) td.dataset.label=heads[i]; })); });
   // a redraw (e.g. the 30-second refresh) must not wipe what the viewer is typing
   for(const [id,v] of Object.entries(S.dirty)){ const el=document.getElementById(id); if(el&&main.contains(el)) el.value=v; }
   fitLayoutPreview();
@@ -255,6 +258,8 @@ function viewOverview(){
     <div class="panel kpi"><div class="label">Spent this month</div><div class="value">${money(d.expenses.filter(e=>(e.date||"").startsWith(month)).reduce((a,e)=>a+num(e.amount),0))}</div><div class="sub">${d.expenses.filter(e=>(e.date||"").startsWith(month)).length} expense${d.expenses.filter(e=>(e.date||"").startsWith(month)).length===1?"":"s"} recorded</div></div>
     <div class="panel kpi"><div class="label">Active projects</div><div class="value">${activeProj.length}</div><div class="sub">${dueTasks.length} task${dueTasks.length===1?"":"s"} due within 7 days</div></div>
   </div><div class="grid2">`;
+  const followUps=openLeads.filter(l=>l.next_follow_up&&l.next_follow_up<=wk).sort((a,b)=>a.next_follow_up.localeCompare(b.next_follow_up));
+  h+=`<section class="panel"><h2>Lead follow-ups</h2>${followUps.length?`<ul class="list-plain">${followUps.slice(0,8).map(l=>`<li data-open="leads:${l.id}"><span><span class="cell-main">${esc(l.name)}</span><br><span class="cell-sub">${esc(l.stage||"New")} · ${esc(userName(l.owner_id))}</span></span><span class="meta" style="${l.next_follow_up<t?"color:var(--bad)":""}">${l.next_follow_up<t?"Overdue · ":""}${fmtDate(l.next_follow_up)}</span></li>`).join("")}</ul>`:`<div class="empty">No lead follow-ups due this week.</div>`}</section>`;
   h+=`<section class="panel"><h2>Tasks due soon</h2>${dueTasks.length?`<ul class="list-plain">${dueTasks.slice(0,8).map(x=>`<li data-open="tasks:${x.id}"><span><span class="cell-main">${esc(x.title)}</span><br><span class="cell-sub">${esc(projectName(x.project_id)||"No project")} · ${esc(userName(x.assignee_id))}</span></span><span class="meta" style="${x.due_date<t?"color:var(--bad)":""}">${x.due_date<t?"Overdue · ":""}${fmtDate(x.due_date)}</span></li>`).join("")}</ul>`:`<div class="empty">No open tasks due this week.</div>`}</section>`;
   h+=`<section class="panel"><h2>Overdue invoices</h2>${overdue.length?`<ul class="list-plain">${overdue.map(i=>`<li data-open="invoices:${i.id}"><span><span class="cell-main mono">${esc(i.number)}</span><br><span class="cell-sub">${esc(clientName(i.client_id))}</span></span><span class="meta"><span class="num">${money(i._t.balance)}</span><br>due ${fmtDate(i.due_date)}</span></li>`).join("")}</ul>`:`<div class="empty">No overdue invoices.</div>`}</section>`;
   const stageVals=LEAD_STAGES.filter(s=>s!=="Lost").map(s=>{const ls=d.leads.filter(l=>l.stage===s);return {s,n:ls.length,v:ls.reduce((a,l)=>a+num(l.value),0)};});
