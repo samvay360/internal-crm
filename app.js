@@ -464,6 +464,20 @@ app.post("/api/admin/users", requireSuper, async (req, res) => {
     [tid, String(name).trim(), mail, hashPassword(String(password)), role === "admin" ? "admin" : "member", now()]);
   res.status(201).json({ id: u.id });
 });
+app.delete("/api/admin/users/:id", requireSuper, async (req, res) => {
+  const id = Number(req.params.id);
+  const u = await one("SELECT * FROM users WHERE id = $1", [id]);
+  if (!u) return res.json({ ok: true });
+  if (u.role === "superadmin") throw httpError(403, "The super admin account can't be deleted.");
+  if (id === req.user.id) throw httpError(400, "You can't delete your own account.");
+  // records keep the id they were created with; only assignments are cleared
+  await q("UPDATE leads SET owner_id = NULL WHERE owner_id = $1", [id]);
+  await q("UPDATE projects SET owner_id = NULL WHERE owner_id = $1", [id]);
+  await q("UPDATE tasks SET assignee_id = NULL WHERE assignee_id = $1", [id]);
+  await q("UPDATE expenses SET paid_by = NULL WHERE paid_by = $1", [id]);
+  await q("DELETE FROM users WHERE id = $1", [id]);
+  res.json({ ok: true });
+});
 app.put("/api/admin/users/:id", requireSuper, async (req, res) => {
   const id = Number(req.params.id);
   const u = await one("SELECT * FROM users WHERE id = $1", [id]);
