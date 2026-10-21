@@ -199,7 +199,7 @@ function renderRail(){
   const c={leads:S.data.leads.filter(l=>!["Won","Lost"].includes(l.stage)).length,clients:S.data.clients.length,projects:S.data.projects.filter(p=>p.status==="Active").length,
     tasks:S.data.tasks.filter(t=>t.status!=="Done").length,quotes:S.data.quotes.length,invoices:S.data.invoices.filter(i=>["Sent","Partially paid","Overdue"].includes(invoiceStatus(i))).length};
   const parent={client:"clients",project:"projects"}[S.view]||S.view;
-  $("#rail").innerHTML=`<div class="brand">${brandMark(S.settings)}<span class="brand-name">${wordmark((S.settings.companyName||"").toUpperCase())}<small>CRM</small></span></div>`+
+  $("#rail").innerHTML=`<div class="brand">${brandMark(S.settings)}<span class="brand-name">${wordmark((S.settings.companyName||"").toUpperCase())}<small>CRM</small></span><button class="burger" data-act="menu" aria-label="Menu" aria-expanded="${$("#rail")?.classList.contains("open")?"true":"false"}"><span></span><span></span><span></span></button></div>`+
     NAV.map(n=>n[0]==="sep"?`<div class="nav-sep"></div>`:
       `<button class="nav-btn" data-go="${n[0]}" ${parent===n[0]?'aria-current="page"':""}><span>${n[1]}</span>${c[n[0]]!=null?`<span class="count">${c[n[0]]}</span>`:""}</button>`).join("")+
     `<div class="rail-foot">${isSuper()&&S.tenants.length?`<label class="label-mono" for="tenant-switch">Working in</label><select class="input" id="tenant-switch" aria-label="Switch company">${S.tenants.map(t=>`<option value="${t.id}" ${t.id===S.tenant?.id?"selected":""}>${esc(t.name)}${t.active?"":" (disabled)"}</option>`).join("")}</select>`:""}<span>${esc(S.me?.name||"")} <span class="tag">${roleLabel(S.me?.role)}</span></span><button data-act="refresh" title="Load the latest changes made by your team">↻ Refresh</button><span class="cell-sub" id="loaded-at">${S.loadedAt?"Updated "+S.loadedAt.toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}):""}</span><button data-act="logout">Sign out</button></div>`;
@@ -744,7 +744,7 @@ function exportCsv(col){
 document.addEventListener("click",async e=>{
   const el=e.target.closest("[data-go],[data-go-detail],[data-open],[data-act],[data-close],[data-mode],[data-tab],[data-stab],[data-add-item],[data-del-item],[data-del-pay],[data-user-role],[data-user-active],[data-user-delete],[data-user-reset],[data-tenant-open],[data-tenant-active],[data-tpl],[data-lkind]");
   if(!el) return;
-  if(el.dataset.go){ e.preventDefault(); closeSheet(); return go(el.dataset.go); }
+  if(el.dataset.go){ e.preventDefault(); closeSheet(); $("#rail")?.classList.remove("open"); return go(el.dataset.go); }
   if(el.dataset.goDetail){ e.preventDefault(); const [v,id]=el.dataset.goDetail.split(":"); closeSheet(); return go(v,Number(id)); }
   if(el.dataset.open){ const [c,id]=el.dataset.open.split(":"); return openRecord(c,Number(id)); }
   if(el.hasAttribute("data-close")) return closeSheet();
@@ -777,6 +777,7 @@ document.addEventListener("click",async e=>{
   const a=el.dataset.act;
   if(a==="save-layout"){ try{ S.settings=await api("PUT","/api/settings",{docLayout:layoutDraft()}); S.layoutDraft=null; render(); toast("Layout saved. New and existing documents use it."); }catch(err){ toast(err.message); } return; }
   if(a==="reset-layout"){ S.layoutDraft={...DocTemplates.LAYOUT_DEFAULTS}; return render(); }
+  if(a==="menu"){ const r=$("#rail"); r.classList.toggle("open"); el.setAttribute("aria-expanded",r.classList.contains("open")); return; }
   if(a==="refresh"){ el.disabled=true; try{ await loadAll(); toast("Up to date"); }catch(err){ toast(err.message); } finally{ el.disabled=false; } return; }
   if(a==="logout"){ try{ await api("POST","/api/logout"); }catch(_){} location.reload(); return; }
   if(a==="new-lead") return openRecord("leads");
