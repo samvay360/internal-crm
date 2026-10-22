@@ -56,7 +56,7 @@ function md(src) {
       continue;
     }
     const para = [];
-    while (i < lines.length && lines[i].trim() && !/^\s*(#{1,4}\s|[-*+]\s|\d+[.)]\s)/.test(lines[i]) && !(lines[i].includes("|") && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1] || ""))) para.push(mdInline(lines[i++]));
+    while (i < lines.length && lines[i].trim() && !/^\s*(#{1,4}\s|[-*+]\s|\d+[.)]\s)/.test(lines[i]) && !/^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[i]) && !(lines[i].includes("|") && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1] || ""))) para.push(mdInline(lines[i++]));
     if (!para.length) para.push(mdInline(lines[i++]));
     out.push(`<p>${para.join("<br>")}</p>`);
   }
