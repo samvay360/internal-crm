@@ -637,12 +637,27 @@ function openDocEditor(col,id,preset={}){
   S.sheet={col,id:id?Number(id):null,doc:d,tab:"edit"};
   drawDocEditor();
 }
+const MD_PROMPT=`Write the body of a business quotation as Markdown. My quotation software adds the header (company logo and details, quotation number, date, validity, client name and address), the total, signature and footer by itself, so do NOT write any of those.
+
+About my business: [what you sell, in 1-2 lines]
+Client and their need: [client name, what they asked for]
+Scope, prices and timeline: [deliverables, price breakdown, phases or dates]
+Terms to include: [payment terms, validity, warranty, GST/taxes, anything else]
+Tone: professional, clear, plain English.
+
+Rules for the output:
+- Return only the Markdown inside one code block, with no explanation before or after.
+- Start directly with the content, not a title or letterhead. Do not write a signature, "From/To" lines, the date or a company address.
+- Use only this syntax: "## Heading" and "### Subheading", **bold**, *italic*, "- " bullets, "1. " numbered lists, "---" divider, and pipe tables with a header row (use a table for pricing or a payment schedule).
+- Do not use HTML, images, links, code blocks or nested lists.
+- If any detail is missing, ask me before writing, otherwise use [placeholders].`;
 function drawDocEditor(){
   const {col,doc:d,id,tab}=S.sheet, isQ=col==="quotes", isNew=!id;
-  const status=isQ?quoteStatus(d):invoiceStatus(d);
+  const status=isQ?quoteStatus(d):invoiceStatus(d), md=isQ&&d.doc_mode==="markdown";
   let body;
   if(tab==="preview") body=docPaper(col,d);
   else body=`${metaStrip(d)}<div class="form">
+    ${isQ?`<div class="field full"><label for="d-mode">Quotation format</label><select class="input" id="d-mode" data-d="doc_mode"><option value="">Standard — line items and totals</option><option value="markdown" ${md?"selected":""}>Custom document — write the body in Markdown</option></select><span class="hint">${md?"Your Markdown becomes the body. Header, client details, totals, signature and footer are still added automatically.":"Pick Custom document to paste a full proposal written in Markdown."}</span></div>`:""}
     <div class="field"><label for="d-number">${isQ?"Quotation":"Invoice"} number</label><input class="input mono" id="d-number" data-d="number" value="${esc(d.number)}"></div>
     <div class="field"><label for="d-client">Client <span class="req">*</span></label><select class="input" id="d-client" data-d="client_id" data-num><option value="">— Select client —</option>${S.data.clients.map(c=>`<option value="${c.id}" ${c.id===d.client_id?"selected":""}>${esc(c.company||c.name)}</option>`).join("")}</select></div>
     <div class="field"><label for="d-date">Date</label><input class="input" type="date" id="d-date" data-d="date" value="${esc(d.date)}"></div>
@@ -652,11 +667,14 @@ function drawDocEditor(){
     <div class="field"><label for="d-project">Project</label><select class="input" id="d-project" data-d="project_id" data-num><option value="">— None —</option>${S.data.projects.filter(p=>!d.client_id||!p.client_id||p.client_id===d.client_id).map(p=>`<option value="${p.id}" ${p.id===d.project_id?"selected":""}>${esc(p.name)}</option>`).join("")}</select></div>
     <div class="field"><label for="d-status">Status</label><select class="input" id="d-status" data-d="status">${(isQ?QUOTE_STATUS:INVOICE_STATUS).map(x=>`<option ${x===d.status?"selected":""}>${x}</option>`).join("")}</select><span class="hint">Shown as ${pill(status)}${isQ?"":" — paid and overdue are worked out from payments and the due date."}</span></div>
   </div>
-  <h3 class="sub-head">Line items</h3>
+  ${md?`<h3 class="sub-head">Document body (Markdown)</h3>
+  <div class="field"><textarea class="input" id="d-body" data-d="body" style="min-height:300px;font-family:var(--font-num);font-size:13px" placeholder="## Scope of work&#10;- Item one&#10;- Item two&#10;&#10;## Pricing&#10;| Item | Amount |&#10;|---|---|&#10;| Design | 50,000 |">${esc(d.body||"")}</textarea><span class="hint">Use the Preview tab to see it with your header and footer.</span></div>
+  <details class="md-help"><summary>Write it with Claude</summary><div class="md-body"><span>Copy this prompt into Claude, fill in the bracketed parts, then paste Claude's Markdown above.</span><pre id="md-prompt">${esc(MD_PROMPT)}</pre><div><button type="button" class="btn sm" data-act="copy-md-prompt">Copy prompt</button></div><span class="cell-sub">Supported: <code>## Heading</code> <code>**bold**</code> <code>*italic*</code> <code>- bullet</code> <code>1. numbered</code> <code>| table |</code> <code>---</code></span></div></details>
+  <div class="form" style="margin-top:12px"><div class="field"><label for="it-rate-0">Quoted amount (optional)</label><input class="input num" id="it-rate-0" type="number" step="any" data-it="0:rate" value="${esc(d.items[0]?.rate??0)}"><span class="hint">Shown as the total under your document. Leave 0 if the Markdown already states prices.</span></div></div>`:`  <h3 class="sub-head">Line items</h3>
   <div class="table-wrap"><table class="items"><thead><tr><th>Description</th>${savedLayout().showHsn?"<th>HSN/SAC</th>":""}<th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th><th></th></tr></thead><tbody>
   ${d.items.map((it,i)=>`<tr><td><input class="input" id="it-desc-${i}" data-it="${i}:desc" value="${esc(it.desc)}" placeholder="Item or service" aria-label="Description"></td>${savedLayout().showHsn?`<td><input class="input hsn" id="it-hsn-${i}" data-it="${i}:hsn" value="${esc(it.hsn||"")}" placeholder="e.g. 998314" aria-label="HSN/SAC code"></td>`:""}<td><input class="input qty num" id="it-qty-${i}" type="number" step="any" data-it="${i}:qty" value="${esc(it.qty)}" aria-label="Quantity"></td><td><input class="input rate num" id="it-rate-${i}" type="number" step="any" data-it="${i}:rate" value="${esc(it.rate)}" aria-label="Rate"></td><td class="r num" data-amt="${i}">${money(num(it.qty)*num(it.rate))}</td><td>${d.items.length>1?`<button type="button" class="btn ghost sm" data-del-item="${i}" aria-label="Remove line">✕</button>`:""}</td></tr>`).join("")}
   </tbody></table></div>
-  <button type="button" class="btn sm" data-add-item style="margin-top:8px">+ Add line</button>
+  <button type="button" class="btn sm" data-add-item style="margin-top:8px">+ Add line</button>`}
   <div class="totals" id="d-totals">${totalsHtml(d)}</div>
   <div class="form" style="margin-top:16px">
     <div class="field"><label for="d-discount">Discount (amount)</label><input class="input num" id="d-discount" type="number" step="any" data-d="discount" value="${esc(d.discount)}"></div>
@@ -700,7 +718,8 @@ function docModel(col,d){
     ref:d.ref||"", subject:d.title||"", notes:d.notes||"", bank:s.bank||"", currency:cur(), money, brandColor:s.brandColor||"",
     seller:{name:s.companyName||"Your company",logo:s.logo,address:s.address,email:s.email,phone:s.phone,website:s.website,gstin:s.taxId},
     buyer:{name:c.company||c.name||"—",contact:c.name,address:c.address,gstin:c.tax_id},
-    items, totals:{...totals(d),taxRate:num(d.tax_rate)} };
+    items, totals:{...totals(d),taxRate:num(d.tax_rate)},
+    ...(isQ&&d.doc_mode==="markdown"?{body:d.body||""}:{}) };
 }
 function docPaper(col,d,layout){ return DocTemplates.render(docModel(col,d),layout||savedLayout()); }
 function setPageSize(layout){
@@ -717,6 +736,7 @@ function docBody(d){
   const out={number:d.number,client_id:d.client_id||null,project_id:d.project_id||null,title:d.title||"",ref:d.ref||"",date:d.date,status:d.status,items,
     discount:num(d.discount),tax_rate:num(d.tax_rate),notes:d.notes||""};
   if(d.valid_until!==undefined) out.valid_until=d.valid_until;
+  if(d.valid_until!==undefined){ out.doc_mode=d.doc_mode||""; out.body=d.doc_mode==="markdown"?(d.body||""):""; }
   if(d.due_date!==undefined) out.due_date=d.due_date;
   if(d.payments) out.payments=d.payments;
   if(d.invoice_id) out.invoice_id=d.invoice_id;
@@ -778,6 +798,7 @@ document.addEventListener("click",async e=>{
   if(a==="save-layout"){ try{ S.settings=await api("PUT","/api/settings",{docLayout:layoutDraft()}); S.layoutDraft=null; render(); toast("Layout saved. New and existing documents use it."); }catch(err){ toast(err.message); } return; }
   if(a==="reset-layout"){ S.layoutDraft={...DocTemplates.LAYOUT_DEFAULTS}; return render(); }
   if(a==="menu"){ const r=$("#rail"); r.classList.toggle("open"); el.setAttribute("aria-expanded",r.classList.contains("open")); return; }
+  if(a==="copy-md-prompt"){ try{ await navigator.clipboard.writeText(MD_PROMPT); toast("Prompt copied"); }catch(e){ const p=$("#md-prompt"); if(p){ const r=document.createRange(); r.selectNodeContents(p); const s=getSelection(); s.removeAllRanges(); s.addRange(r); } toast("Select the prompt and copy it"); } return; }
   if(a==="refresh"){ el.disabled=true; try{ await loadAll(); toast("Up to date"); }catch(err){ toast(err.message); } finally{ el.disabled=false; } return; }
   if(a==="logout"){ try{ await api("POST","/api/logout"); }catch(_){} location.reload(); return; }
   if(a==="new-lead") return openRecord("leads");
@@ -847,6 +868,10 @@ document.addEventListener("change",async e=>{
   if(el.id==="exp-month"){ S.expMonth=el.value; return render(); }
   if(el.id==="exp-cat"){ S.expCategory=el.value; return render(); }
   if(el.id==="tenant-switch") return switchTenant(+el.value);
+  if(el.dataset.d==="doc_mode"&&S.sheet?.doc){ const d=S.sheet.doc;
+    if(el.value==="markdown"){ d._items=d.items; d.items=[{desc:"Quoted amount",qty:1,rate:d._items.length>1||d._items[0]?.desc?totals({items:d._items}).sub:num(d._items[0]?.rate)}]; }
+    else if(d._items){ d.items=d._items; delete d._items; }
+    drawDocEditor(); }
   if(el.dataset.d==="client_id"&&S.sheet?.doc){ S.sheet.doc.client_id=Number(el.value)||null; drawDocEditor(); }
   if(el.id==="s-logo-file"&&el.files[0]){
     const f=el.files[0]; if(f.size>1_000_000){ toast("Use an image under 1 MB."); el.value=""; return; }

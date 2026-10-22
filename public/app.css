@@ -228,6 +228,20 @@ td.r,th.r{text-align:right}
 .doc .d-words{font-style:italic}
 .doc .d-words .d-lbl{font-style:normal}
 .doc .d-block{margin-top:12px}
+.doc .d-body{margin:14px 0}
+.doc .d-md p{margin:0 0 6px}.doc .d-md>:last-child{margin-bottom:0}
+.doc .d-md ul,.doc .d-md ol{margin:0 0 6px;padding-left:20px}
+.doc .d-md hr{border:0;border-top:1px solid var(--rule);margin:8px 0}
+.doc .d-md code{font-family:var(--font-num);font-size:.9em;background:rgba(0,0,0,.06);padding:0 3px;border-radius:3px}
+.doc .d-md-h{font-weight:700;margin:8px 0 3px}.doc .d-md-h1{font-size:1.2em}.doc .d-md-h2{font-size:1.1em}
+.doc .d-md-table{width:100%;border-collapse:collapse;margin:4px 0 8px;font-size:.95em}
+.doc .d-md-table th,.doc .d-md-table td{border:1px solid var(--rule);padding:4px 8px;text-align:left;background:none;text-transform:none;letter-spacing:0;font-family:inherit;font-size:inherit;color:inherit;white-space:normal}
+.doc .d-md-table th{font-weight:700}
+.md-help{margin-top:8px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--sunk);font-size:13px}
+.md-help summary{cursor:pointer;padding:9px 12px;font-family:var(--font-num);font-size:11px;text-transform:uppercase;letter-spacing:.08em}
+.md-help .md-body{padding:0 12px 12px;display:grid;gap:8px}
+.md-help pre{margin:0;padding:10px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);white-space:pre-wrap;font:12px/1.5 var(--font-num);max-height:260px;overflow:auto}
+.md-help code{font-family:var(--font-num);font-size:12px}
 .doc .d-subject{font-size:13px}
 .doc .d-sign{align-self:flex-end;margin-left:auto;text-align:center;width:230px;display:flex;flex-direction:column;gap:2px}
 .doc .d-sign-line{height:46px;border-bottom:1px solid var(--ink);margin-bottom:4px}
