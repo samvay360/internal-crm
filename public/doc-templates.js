@@ -126,16 +126,17 @@ function totalsRows(m, L) {
   if (t.paid > 0) rows.push(["Paid", "−" + m.money(t.paid)], ["Balance due", m.money(t.balance), "grand"]);
   return rows;
 }
-const totalsBlock = (m, L, cls = "d-totals") =>
+const totalsBlock = (m, L, cls = "d-totals") => m.body != null && !m.totals.total ? "" :
   `<div class="${cls}">${totalsRows(m, L).map(([k, v, c]) => `<div class="d-trow ${c || ""}"><span>${k}</span><span class="d-num">${v}</span></div>`).join("")}</div>`;
 function itemsTable(m, L, { serial = false } = {}) {
+  if (m.body != null) return `<div class="d-body">${md(m.body)}</div>`;
   const head = `<tr>${serial ? `<th class="d-sr">#</th>` : ""}<th>Description</th>${L.showHsn ? "<th>HSN/SAC</th>" : ""}<th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr>`;
   const rows = m.items.map((i, n) => `<tr>${serial ? `<td class="d-sr">${n + 1}</td>` : ""}<td>${esc(i.desc)}</td>${L.showHsn ? `<td>${esc(i.hsn || "")}</td>` : ""}<td class="r d-num">${i.qty}</td><td class="r d-num">${m.money(i.rate)}</td><td class="r d-num">${m.money(i.amount)}</td></tr>`).join("");
   return `<div class="d-table-wrap"><table class="d-items"><thead>${head}</thead><tbody>${rows || `<tr><td colspan="6" class="d-muted">No items</td></tr>`}</tbody></table></div>`;
 }
-const words = (m, L) => L.showWords ? `<div class="d-words"><span class="d-lbl">Amount in words</span>${esc(amountInWords(m.totals.total, m.currency))}</div>` : "";
+const words = (m, L) => L.showWords && !(m.body != null && !m.totals.total) ? `<div class="d-words"><span class="d-lbl">Amount in words</span>${esc(amountInWords(m.totals.total, m.currency))}</div>` : "";
 const bank = (m, L) => m.kind === "invoice" && L.showBank && m.bank ? `<div class="d-block"><div class="d-lbl">Payment details</div>${ml(m.bank)}</div>` : "";
-const notes = (m, L) => L.showNotes && m.notes ? `<div class="d-block"><div class="d-lbl">Notes &amp; terms</div>${md(m.notes)}</div>` : "";
+const notes = (m, L) => L.showNotes && m.notes ? `<div class="d-block"><div class="d-lbl">Notes &amp; terms</div>${ml(m.notes)}</div>` : "";
 const signature = (m, L) => L.showSignature ? `<div class="d-sign"><div>For <b>${esc(m.seller.name)}</b></div><div class="d-sign-line"></div><div>${esc(L.signatureLabel || "Authorised Signatory")}</div></div>` : "";
 const footer = L => L.footer ? `<div class="d-footer">${esc(L.footer)}</div>` : "";
 const subject = m => m.subject ? `<div class="d-subject"><span class="d-lbl">Subject</span>${esc(m.subject)}</div>` : "";

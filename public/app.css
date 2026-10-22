@@ -228,6 +228,7 @@ td.r,th.r{text-align:right}
 .doc .d-words{font-style:italic}
 .doc .d-words .d-lbl{font-style:normal}
 .doc .d-block{margin-top:12px}
+.doc .d-body{margin:14px 0}
 .doc .d-md p{margin:0 0 6px}.doc .d-md>:last-child{margin-bottom:0}
 .doc .d-md ul,.doc .d-md ol{margin:0 0 6px;padding-left:20px}
 .doc .d-md hr{border:0;border-top:1px solid var(--rule);margin:8px 0}

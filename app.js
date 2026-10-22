@@ -57,7 +57,7 @@ const ENTITIES = {
     label: "quotation",
     fields: { number: "text", client_id: "num", project_id: "num", title: "text", ref: "text", date: "text",
       valid_until: "text", status: "text", items: "json", discount: "num", tax_rate: "num", notes: "text",
-      total: "num", invoice_id: "num" },
+      total: "num", invoice_id: "num", doc_mode: "text", body: "text" },
     required: ["number", "client_id"],
     unique: "number",
   },
