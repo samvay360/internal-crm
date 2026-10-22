@@ -58,6 +58,36 @@ function confirmBox(title,body,okLabel="Delete"){
     document.body.appendChild(m); m.querySelector('[data-a="yes"]').focus();
   });
 }
+// "+ New client…" in a client dropdown: ask for the basics, save, and resolve with the new record (or null)
+function newClientPopup(){
+  return new Promise(res=>{
+    const m=document.createElement("div"); m.className="modal";
+    m.innerHTML=`<form class="modal-box" role="dialog" aria-modal="true" aria-label="New client"><h3>New client</h3>
+      <div class="form" style="margin:12px 0 16px">
+        <div class="field full"><label for="nc-name">Contact name <span class="req">*</span></label><input class="input" id="nc-name" required></div>
+        <div class="field full"><label for="nc-company">Company</label><input class="input" id="nc-company"></div>
+        <div class="field"><label for="nc-phone">Phone</label><input class="input" id="nc-phone" type="tel"></div>
+        <div class="field"><label for="nc-email">Email</label><input class="input" id="nc-email" type="email"></div>
+      </div><div class="row"><button type="button" class="btn" data-a="no">Cancel</button><button type="submit" class="btn primary">Add client</button></div></form>`;
+    const done=v=>{ m.remove(); res(v); };
+    m.addEventListener("click",e=>{ if(e.target===m||e.target.closest('[data-a="no"]')) done(null); });
+    m.querySelector("form").addEventListener("submit",async e=>{
+      e.preventDefault(); const btn=e.submitter; btn.disabled=true;
+      const v=id=>m.querySelector("#"+id).value.trim();
+      try{ const rec=await api("POST","/api/clients",{name:v("nc-name"),company:v("nc-company"),phone:v("nc-phone"),email:v("nc-email")});
+        S.data.clients.push(rec); toast("Client added"); done(rec); }
+      catch(err){ toast(err.message); btn.disabled=false; }
+    });
+    document.body.appendChild(m); m.querySelector("#nc-name").focus();
+  });
+}
+async function pickNewClient(el){
+  const rec=await newClientPopup();
+  if(!rec){ el.value=el.dataset.prev||""; if(el.dataset.d==="client_id"&&S.sheet?.doc) S.sheet.doc.client_id=Number(el.value)||null; return; }
+  if(el.dataset.d==="client_id"&&S.sheet?.doc){ S.sheet.doc.client_id=rec.id; return drawDocEditor(); }
+  const opt=new Option(rec.company||rec.name,rec.id); el.insertBefore(opt,el.querySelector('option[value="__new__"]')); el.value=String(rec.id);
+  el.dispatchEvent(new Event("input",{bubbles:true}));
+}
 function saveFile(filename,content,type){
   const url=URL.createObjectURL(new Blob([content],{type}));
   const a=document.createElement("a"); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove();
@@ -578,7 +608,7 @@ function fieldHtml([key,label,type="text",o={}],rec){
   const sel=inner=>`<div class="${cls}">${lab}<select class="input" id="${id}" name="${key}" data-type="${type}">${inner}</select></div>`;
   if(type==="select") return sel(options(o.opts(),v));
   if(type==="region") return `<div class="${cls}">${lab}<input class="input" id="${id}" name="${key}" data-type="${type}" list="${id}-list" value="${esc(v)}" placeholder="Pick or type a region" autocomplete="off"><datalist id="${id}-list">${(S.settings.regions||[]).map(r=>`<option value="${esc(r)}">`).join("")}</datalist></div>`;
-  if(type==="client") return sel(`<option value="">— None —</option>`+[...S.data.clients].sort((a,b)=>(a.company||a.name).localeCompare(b.company||b.name)).map(c=>`<option value="${c.id}" ${c.id===v?"selected":""}>${esc(c.company||c.name)}</option>`).join(""));
+  if(type==="client") return sel(`<option value="">— None —</option>`+[...S.data.clients].sort((a,b)=>(a.company||a.name).localeCompare(b.company||b.name)).map(c=>`<option value="${c.id}" ${c.id===v?"selected":""}>${esc(c.company||c.name)}</option>`).join("")+`<option value="__new__">+ New client…</option>`);
   if(type==="project") return sel(`<option value="">— None —</option>`+S.data.projects.map(p=>`<option value="${p.id}" ${p.id===v?"selected":""}>${esc(p.name)}</option>`).join(""));
   if(type==="person") return sel(`<option value="">Unassigned</option>`+S.users.filter(u=>u.active||u.id===v).map(u=>`<option value="${u.id}" ${u.id===v?"selected":""}>${esc(u.name)}${u.id===S.me.id?" (you)":""}</option>`).join(""));
   if(type==="textarea") return `<div class="${cls}">${lab}<textarea class="input" id="${id}" name="${key}">${esc(v)}</textarea></div>`;
@@ -659,7 +689,7 @@ function drawDocEditor(){
   else body=`${metaStrip(d)}<div class="form">
     ${isQ?`<div class="field full"><label for="d-mode">Quotation format</label><select class="input" id="d-mode" data-d="doc_mode"><option value="">Standard — line items and totals</option><option value="markdown" ${md?"selected":""}>Custom document — write the body in Markdown</option></select><span class="hint">${md?"Your Markdown becomes the body. Header, client details, totals, signature and footer are still added automatically.":"Pick Custom document to paste a full proposal written in Markdown."}</span></div>`:""}
     <div class="field"><label for="d-number">${isQ?"Quotation":"Invoice"} number</label><input class="input mono" id="d-number" data-d="number" value="${esc(d.number)}"></div>
-    <div class="field"><label for="d-client">Client <span class="req">*</span></label><select class="input" id="d-client" data-d="client_id" data-num><option value="">— Select client —</option>${S.data.clients.map(c=>`<option value="${c.id}" ${c.id===d.client_id?"selected":""}>${esc(c.company||c.name)}</option>`).join("")}</select></div>
+    <div class="field"><label for="d-client">Client <span class="req">*</span></label><select class="input" id="d-client" data-d="client_id" data-num><option value="">— Select client —</option>${S.data.clients.map(c=>`<option value="${c.id}" ${c.id===d.client_id?"selected":""}>${esc(c.company||c.name)}</option>`).join("")}<option value="__new__">+ New client…</option></select></div>
     <div class="field"><label for="d-date">Date</label><input class="input" type="date" id="d-date" data-d="date" value="${esc(d.date)}"></div>
     <div class="field"><label for="d-due">${isQ?"Valid until":"Due date"}</label><input class="input" type="date" id="d-due" data-d="${isQ?"valid_until":"due_date"}" value="${esc(isQ?d.valid_until:d.due_date)}"></div>
     <div class="field"><label for="d-title">Subject</label><input class="input" id="d-title" data-d="title" value="${esc(d.title||"")}" placeholder="e.g. Website redesign"></div>
@@ -853,15 +883,18 @@ function layoutInput(el){
 document.addEventListener("input",e=>{
   const el=e.target;
   if(el.dataset.l||el.dataset.lPick) return layoutInput(el);
+  if(el.tagName==="SELECT"&&el.value==="__new__") return;
   trackDirty(el);
   if(el.dataset.search!=null){ S.q[el.dataset.search]=el.value; return render(); }
   if(el.dataset.d&&S.sheet?.doc){ S.sheet.doc[el.dataset.d]=el.hasAttribute("data-num")?(Number(el.value)||null):el.value; if(["discount","tax_rate"].includes(el.dataset.d)) syncDocTotals(); return; }
   if(el.dataset.it&&S.sheet?.doc){ const [i,k]=el.dataset.it.split(":"); S.sheet.doc.items[+i][k]=el.value; return syncDocTotals(); }
   if(el.id==="s-brandColor-pick"){ $("#s-brandColor").value=el.value; trackDirty($("#s-brandColor")); }
 });
+document.addEventListener("focusin",e=>{ if(e.target.tagName==="SELECT") e.target.dataset.prev=e.target.value; });
 document.addEventListener("change",async e=>{
   const el=e.target;
   if(el.dataset.l||el.dataset.lPick) return layoutInput(el);
+  if(el.tagName==="SELECT"&&el.value==="__new__") return pickNewClient(el);
   trackDirty(el);
   if(el.id==="task-filter"){ S.taskFilter=el.value; return render(); }
   if(el.id==="lead-region"){ S.leadRegion=el.value; return render(); }
