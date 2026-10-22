@@ -637,6 +637,18 @@ function openDocEditor(col,id,preset={}){
   S.sheet={col,id:id?Number(id):null,doc:d,tab:"edit"};
   drawDocEditor();
 }
+const MD_PROMPT=`Write the "Notes & terms" section for a business quotation or invoice, as Markdown.
+
+About my business: [what you sell, e.g. aluminium window fabrication software, in 1-2 lines]
+Terms I need to cover: [payment terms, validity, delivery or timeline, warranty, GST/taxes, cancellation, etc.]
+Tone: short, professional, plain English.
+
+Rules for the output:
+- Return only the Markdown inside one code block, with no explanation before or after.
+- Use only this syntax: "## Heading" (max 2 levels), **bold**, *italic*, "- " bullets, "1. " numbered lists, "---" for a divider, and simple pipe tables with a header row (for example a payment schedule).
+- Do not use HTML, images, links, blockquotes or nested lists.
+- Keep it under 150 words so it fits on one page under the totals.
+- Use placeholders like [date] only where I have not given a value.`;
 function drawDocEditor(){
   const {col,doc:d,id,tab}=S.sheet, isQ=col==="quotes", isNew=!id;
   const status=isQ?quoteStatus(d):invoiceStatus(d);
@@ -661,7 +673,8 @@ function drawDocEditor(){
   <div class="form" style="margin-top:16px">
     <div class="field"><label for="d-discount">Discount (amount)</label><input class="input num" id="d-discount" type="number" step="any" data-d="discount" value="${esc(d.discount)}"></div>
     <div class="field"><label for="d-tax">Tax rate (%)</label><input class="input num" id="d-tax" type="number" step="any" data-d="tax_rate" value="${esc(d.tax_rate)}"></div>
-    <div class="field full"><label for="d-notes">Notes & terms</label><textarea class="input" id="d-notes" data-d="notes">${esc(d.notes||"")}</textarea></div>
+    <div class="field full"><label for="d-notes">Notes & terms</label><textarea class="input" id="d-notes" data-d="notes">${esc(d.notes||"")}</textarea><span class="hint">Markdown is supported: **bold**, *italic*, - bullets, 1. numbers, # headings, tables. See the preview tab.</span>
+    <details class="md-help"><summary>Write terms with Claude</summary><div class="md-body"><span>Copy this prompt into Claude, fill in the bracketed parts, then paste the answer into Notes &amp; terms.</span><pre id="md-prompt">${esc(MD_PROMPT)}</pre><div><button type="button" class="btn sm" data-act="copy-md-prompt">Copy prompt</button></div><span class="cell-sub">Supported: <code># Heading</code> <code>**bold**</code> <code>*italic*</code> <code>- bullet</code> <code>1. numbered</code> <code>| table |</code> <code>---</code></span></div></details></div>
   </div>
   ${!isQ&&!isNew?paymentsHtml(d):""}`;
   const actions=[];
@@ -778,6 +791,7 @@ document.addEventListener("click",async e=>{
   if(a==="save-layout"){ try{ S.settings=await api("PUT","/api/settings",{docLayout:layoutDraft()}); S.layoutDraft=null; render(); toast("Layout saved. New and existing documents use it."); }catch(err){ toast(err.message); } return; }
   if(a==="reset-layout"){ S.layoutDraft={...DocTemplates.LAYOUT_DEFAULTS}; return render(); }
   if(a==="menu"){ const r=$("#rail"); r.classList.toggle("open"); el.setAttribute("aria-expanded",r.classList.contains("open")); return; }
+  if(a==="copy-md-prompt"){ try{ await navigator.clipboard.writeText(MD_PROMPT); toast("Prompt copied"); }catch(e){ const p=$("#md-prompt"); if(p){ const r=document.createRange(); r.selectNodeContents(p); const s=getSelection(); s.removeAllRanges(); s.addRange(r); } toast("Select the prompt and copy it"); } return; }
   if(a==="refresh"){ el.disabled=true; try{ await loadAll(); toast("Up to date"); }catch(err){ toast(err.message); } finally{ el.disabled=false; } return; }
   if(a==="logout"){ try{ await api("POST","/api/logout"); }catch(_){} location.reload(); return; }
   if(a==="new-lead") return openRecord("leads");
