@@ -10,6 +10,7 @@ A CRM for managing leads, clients, projects, tasks, quotations and invoices. It'
 - **History:** every record shows who added it, who last changed it, and a full change history. The overview shows recent activity.
 - **Multi-tenant:** each company is a tenant. Every user, record, setting and history entry has a `tenant_id`, and all reads and writes are limited to the signed-in user's tenant. Quotation and invoice numbers are unique within a tenant.
 - **Accounts:** there is one **super admin**, created on first run. Only the super admin can add companies (tenants) and create, disable or reset user accounts, in Settings → Accounts. The super admin can switch between tenants from the sidebar. Tenant **administrators** manage their own company's settings. **Members** add and edit records. Only administrators or the person who added a record can delete it.
+- **Navigation:** every page and every open record has its own address (`/leads`, `/clients/12`, `/invoices?record=invoices/5`), so Back/Forward, reload, bookmarks and Ctrl/⌘-click to open in a new tab all work. Back also closes panels and dialogs, and you are asked before unsaved changes are thrown away.
 - **Settings:** company details, logo, brand colour, lists (regions, lead sources, expense categories), currency, and quotation/invoice prefixes.
 - **Export:** CSV export for leads, clients, projects, quotations, invoices and expenses.
 

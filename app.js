@@ -557,6 +557,8 @@ app.use("/api", (req, res) => res.status(404).json({ error: "Not found." }));
 
 /* static frontend (on Vercel, public/ is served by the CDN and never reaches this) */
 app.use(express.static(path.join(__dirname, "public")));
+// every page address (/leads, /clients/12, /settings/documents…) loads the app, which routes in the browser
+app.get(/^\/(?!api\/)[^.]*$/, (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
 app.use((err, req, res, next) => {
   if (err.status && err.status < 500) return res.status(err.status).json({ error: err.message });

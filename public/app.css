@@ -47,7 +47,7 @@ a{color:var(--accent)}
 .brand-name{font-weight:800;letter-spacing:-.01em;font-size:15px;line-height:1.15;min-width:0;overflow-wrap:anywhere}
 .brand-name .hl{color:var(--accent)}
 .brand small{display:block;font-family:var(--font-num);font-weight:400;font-size:10px;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);margin-top:2px}
-.nav-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;border:0;background:none;color:var(--muted);text-align:left;
+.nav-btn{text-decoration:none;display:flex;align-items:center;justify-content:space-between;gap:8px;border:0;background:none;color:var(--muted);text-align:left;
   padding:9px 12px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--font-num);font-size:12px;text-transform:uppercase;letter-spacing:.08em;transition:color .2s,background .2s}
 .nav-btn:hover{color:var(--fg)}
 .nav-btn[aria-current="page"]{background:var(--ink);color:var(--ink-fg)}
@@ -339,7 +339,45 @@ td.r,th.r{text-align:right}
   .search{width:100%}
   .form{grid-template-columns:1fr}
 }
-@media (prefers-reduced-motion:no-preference){.sheet{animation:slide .2s ease-out}@keyframes slide{from{transform:translateX(24px);opacity:.6}}}
+/* ---------- loading & motion ---------- */
+#progress{position:fixed;top:0;left:0;right:0;height:3px;z-index:100;pointer-events:none;opacity:0;transition:opacity .3s}
+#progress i{display:block;height:100%;width:0;background:var(--accent);box-shadow:0 0 8px color-mix(in srgb,var(--accent) 60%,transparent)}
+#progress.on{opacity:1}
+#progress.on i{width:85%;transition:width 6s cubic-bezier(.1,.7,.2,1)}
+#progress.done i{width:100%;transition:width .2s ease-out}
+#progress.done{opacity:0;transition:opacity .3s .15s}
+.boot{min-height:100vh;display:grid;place-items:center;background:var(--bg)}
+.boot-ring{width:34px;height:34px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--accent);animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.skel{display:block;border-radius:6px;background:linear-gradient(90deg,var(--sunk) 0%,color-mix(in srgb,var(--sunk) 40%,var(--surface)) 50%,var(--sunk) 100%);background-size:200% 100%;animation:shimmer 1.3s ease-in-out infinite}
+.nav-skel{height:30px;margin:4px 0;border-radius:8px}
+.skel-lines{display:grid;gap:10px}
+.skel-lines i{display:block;height:12px;border-radius:6px;background:linear-gradient(90deg,var(--sunk) 0%,color-mix(in srgb,var(--sunk) 40%,var(--surface)) 50%,var(--sunk) 100%);background-size:200% 100%;animation:shimmer 1.3s ease-in-out infinite}
+.skel-lines i:nth-child(2n){width:80%}.skel-lines i:nth-child(3n){width:60%}
+@keyframes shimmer{from{background-position:100% 0}to{background-position:-100% 0}}
+.load-error{padding:32px;text-align:center;display:flex;flex-direction:column;gap:8px;align-items:center}
+.load-error strong{font-size:18px}.load-error p{color:var(--muted);margin:0 0 8px}
+/* a button waiting on the server: label fades, spinner shows */
+.btn.is-busy{position:relative;color:transparent!important;pointer-events:none;opacity:1!important}
+.btn.is-busy::after{content:"";position:absolute;inset:0;margin:auto;width:14px;height:14px;border-radius:50%;border:2px solid currentColor;border-color:var(--muted);border-top-color:transparent;animation:spin .7s linear infinite}
+.btn.primary.is-busy::after{border-color:var(--ink-fg);border-top-color:transparent}
+.rail-foot button.is-busy{color:transparent}
+main h1:focus{outline:none}
+.scrim.closing,.modal.closing{opacity:0;transition:opacity .16s ease-in}
+@media (prefers-reduced-motion:no-preference){
+  .sheet{animation:slide-in .22s cubic-bezier(.2,.8,.2,1)}
+  .sheet.closing{animation:slide-out .17s ease-in forwards}
+  .scrim{animation:fade-in .2s ease-out}
+  .modal{animation:fade-in .14s ease-out}
+  .modal-box{animation:pop .16s cubic-bezier(.2,.8,.2,1)}
+  main.view-enter{animation:view-in .2s ease-out}
+  @keyframes slide-in{from{transform:translateX(32px);opacity:0}}
+  @keyframes slide-out{to{transform:translateX(32px);opacity:0}}
+  @keyframes fade-in{from{opacity:0}}
+  @keyframes pop{from{transform:scale(.97);opacity:0}}
+  @keyframes view-in{from{opacity:0;transform:translateY(4px)}}
+}
+@media (prefers-reduced-motion:reduce){ .skel,.skel-lines i,.boot-ring,.btn.is-busy::after{animation-duration:2.4s} #progress.on i{transition:none;width:85%} }
 
 @media print{
   body{background:#fff}

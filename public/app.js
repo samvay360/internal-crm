@@ -22,7 +22,8 @@ const S = {
   view:"overview", param:null, q:{}, mode:{leads:"board",tasks:"board"},
   taskFilter:"all", leadRegion:"", expMonth:null, expCategory:"", settingsTab:"company", sheet:null,
   tenant:null, tenants:[], allUsers:[],
-  dirty:{}, dirtyKey:""   // what the viewer has typed into page forms, kept across redraws
+  dirty:{}, dirtyKey:"",  // what the viewer has typed into page forms, kept across redraws
+  inflight:0, ready:false, modal:null
 };
 try{ const m=JSON.parse(localStorage.getItem("crm.mode")||"null"); if(m) Object.assign(S.mode,m); }catch(e){}
 
@@ -51,12 +52,27 @@ function toast(msg){
   setTimeout(()=>t.remove(),3000);
 }
 function confirmBox(title,body,okLabel="Delete"){
+  S.modal?.dismiss();
   return new Promise(res=>{
+    const opener=document.activeElement;
     const m=document.createElement("div"); m.className="modal";
-    m.innerHTML=`<div class="modal-box" role="dialog" aria-modal="true"><h3>${esc(title)}</h3><p>${esc(body)}</p><div class="row"><button class="btn" data-a="no">Cancel</button><button class="btn primary" data-a="yes">${esc(okLabel)}</button></div></div>`;
-    m.addEventListener("click",e=>{ const a=e.target.closest("[data-a]")?.dataset.a; if(a||e.target===m){ m.remove(); res(a==="yes"); }});
+    m.innerHTML=`<div class="modal-box" role="alertdialog" aria-modal="true" aria-labelledby="modal-t" aria-describedby="modal-b"><h3 id="modal-t">${esc(title)}</h3><p id="modal-b">${esc(body)}</p><div class="row"><button class="btn" data-a="no">Cancel</button><button class="btn primary" data-a="yes">${esc(okLabel)}</button></div></div>`;
+    const done=v=>{ if(!m.isConnected) return; S.modal=null; m.classList.add("closing"); setTimeout(()=>m.remove(),140); opener?.focus?.({preventScroll:true}); res(v); };
+    m.addEventListener("click",e=>{ const a=e.target.closest("[data-a]")?.dataset.a; if(a||e.target===m) done(a==="yes"); });
+    m.addEventListener("keydown",e=>{ if(e.key==="Escape"){ e.stopPropagation(); done(false); } trapFocus(e,m); });
+    S.modal={dismiss:()=>done(false)};
     document.body.appendChild(m); m.querySelector('[data-a="yes"]').focus();
   });
+}
+const confirmDiscard=()=>confirmBox("Discard unsaved changes?","You have changes that haven't been saved. If you leave now they will be lost.","Discard changes");
+// keep Tab inside an open dialog or panel
+function trapFocus(e,root){
+  if(e.key!=="Tab") return;
+  const f=[...root.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')].filter(x=>x.offsetParent!==null);
+  if(!f.length) return;
+  const first=f[0], last=f[f.length-1];
+  if(e.shiftKey&&document.activeElement===first){ e.preventDefault(); last.focus(); }
+  else if(!e.shiftKey&&document.activeElement===last){ e.preventDefault(); first.focus(); }
 }
 function saveFile(filename,content,type){
   const url=URL.createObjectURL(new Blob([content],{type}));
@@ -65,8 +81,19 @@ function saveFile(filename,content,type){
 }
 
 /* ---------- API ---------- */
+// Thin bar at the top of the window while any request is running (after a short delay, so quick ones don't flicker).
+function progress(delta){
+  S.inflight=Math.max(0,S.inflight+delta);
+  const bar=$("#progress"); if(!bar) return;
+  clearTimeout(S.progT);
+  if(S.inflight>0){ if(!bar.classList.contains("on")) S.progT=setTimeout(()=>{ bar.classList.remove("done"); bar.classList.add("on"); },120); }
+  else if(bar.classList.contains("on")){ bar.classList.add("done"); S.progT=setTimeout(()=>bar.classList.remove("on","done"),320); }
+}
 async function api(method,url,body){
-  const res=await fetch(url,{method,headers:body?{"Content-Type":"application/json"}:{},body:body?JSON.stringify(body):undefined,credentials:"same-origin"});
+  let res; progress(1);
+  try{ res=await fetch(url,{method,headers:body?{"Content-Type":"application/json"}:{},body:body?JSON.stringify(body):undefined,credentials:"same-origin"}); }
+  catch(e){ throw new Error("Can't reach the server. Check your internet connection and try again."); }
+  finally{ progress(-1); }
   let data=null; try{ data=await res.json(); }catch(e){}
   if(res.status===401&&!url.endsWith("/login")){ showAuth(); throw new Error("Your session has ended. Please sign in again."); }
   if(!res.ok) throw new Error(data?.error||"The server could not complete this request.");
@@ -151,17 +178,31 @@ function nextNumber(col,prefix){
 /* ---------- auth screens ---------- */
 async function start(){
   let st;
-  try{ st=await api("GET","/api/status"); }catch(e){ document.body.innerHTML=`<div class="auth"><div class="auth-box"><h1>Cannot reach the server</h1><p>${esc(e.message)}</p></div></div>`; return; }
+  try{ st=await api("GET","/api/status"); }catch(e){ return showFatal(e.message); }
   applyBrand(st);
   if(st.needsSetup) return showSetup(st);
   if(!st.user) return showAuth(st);
-  showApp(); await loadAll();
+  showApp();
+  const rt=routeFromUrl();
+  S.view=rt.view; S.param=rt.param; if(rt.tab) S.settingsTab=rt.tab;
+  try{ await loadAll(); }catch(e){ return showLoadError(e.message); }
+  S.ready=true;
+  history.replaceState({route:true,scroll:0,sheetPushed:false,preset:null},"",location.pathname+location.search); remember();
+  applyRoute(rt);
+}
+function showFatal(msg){
+  $("#root").innerHTML=`<div class="auth"><div class="auth-box"><h1>Can't reach the CRM</h1><p>${esc(msg)}</p><button class="btn primary" onclick="location.reload()">Try again</button></div></div>`;
+}
+function showLoadError(msg){
+  const m=$("#main"); if(!m) return showFatal(msg);
+  m.innerHTML=`<div class="panel load-error" role="alert"><strong>Your data didn't load</strong><p>${esc(msg)}</p><button class="btn primary" onclick="location.reload()">Try again</button></div>`;
 }
 function authShell(st,inner){
   $("#root").innerHTML=`<div class="auth"><form class="auth-box" id="auth-form" novalidate>${st?.logo?`<img class="auth-logo" src="${esc(st.logo)}" alt="">`:""}${inner}<div class="error" id="auth-error" role="alert"></div></form></div>`;
   $("#auth-form input")?.focus();
 }
 async function showAuth(st){
+  S.ready=false; S.sheet=null; S.modal?.dismiss(); if($("#overlay")) $("#overlay").innerHTML="";
   if(!st){ try{ st=await api("GET","/api/status"); }catch(e){ st={}; } }
   authShell(st,`<h1>Sign in${st.companyName?" to "+esc(st.companyName):""}</h1><p>Use the email and password your administrator gave you.</p>
     <div class="field"><label for="a-email">Email</label><input class="input" id="a-email" type="email" autocomplete="username" required></div>
@@ -183,16 +224,116 @@ function showSetup(st){
     catch(err){ $("#auth-error").textContent=err.message; } };
 }
 function showApp(){
-  $("#root").innerHTML=`<div class="app"><nav class="rail" id="rail" aria-label="Modules"></nav><main id="main"><div class="empty"><strong>Loading…</strong></div></main></div>`;
+  $("#root").innerHTML=`<div class="app"><nav class="rail" id="rail" aria-label="Modules">${skeletonRail()}</nav><main id="main" aria-busy="true">${skeletonPage()}</main></div>`;
+}
+// Placeholders shown while the first load is in flight.
+const skeletonRail=()=>`<div class="brand"><span class="brand-mark"></span><span class="skel" style="width:110px;height:14px"></span></div>${Array.from({length:9},()=>`<span class="skel nav-skel"></span>`).join("")}`;
+const skeletonPage=()=>`<div class="head"><div><span class="skel" style="width:220px;height:30px"></span><span class="skel" style="width:320px;height:12px;margin-top:10px"></span></div></div>
+  <div class="kpis">${Array.from({length:4},()=>`<div class="panel kpi"><span class="skel" style="width:60%;height:10px"></span><span class="skel" style="width:80%;height:24px;margin-top:10px"></span></div>`).join("")}</div>
+  <div class="panel" style="padding:18px"><div class="skel-lines"><i></i><i></i><i></i><i></i><i></i></div></div>`;
+
+/* ---------- navigation ----------
+ * Every page has a real address and goes into browser history, so Back/Forward, reload,
+ * bookmarks and "open in new tab" all work:
+ *   /  /leads  /clients  /clients/12  /projects  /projects/7  /tasks
+ *   /quotations  /invoices  /expenses  /settings/<tab>
+ * An open record panel adds ?record=<collection>/<id|new>, so Back closes it and a link can open it.
+ * A route is {view, param, tab, record:{col,id}|null}. */
+const PATHS={overview:"",leads:"leads",clients:"clients",client:"clients",projects:"projects",project:"projects",tasks:"tasks",
+  quotes:"quotations",invoices:"invoices",expenses:"expenses",settings:"settings"};
+const VIEW_OF={leads:"leads",clients:"clients",projects:"projects",tasks:"tasks",quotations:"quotes",invoices:"invoices",expenses:"expenses",settings:"settings"};
+const TITLES={overview:"Overview",leads:"Leads",clients:"Clients",projects:"Projects",tasks:"Tasks",quotes:"Quotations",invoices:"Invoices",expenses:"Expenses",settings:"Settings"};
+const sameRecord=(a,b)=>(!a&&!b)||(!!a&&!!b&&a.col===b.col&&String(a.id)===String(b.id));
+
+function routeFromUrl(){
+  const parts=location.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  let view=VIEW_OF[parts[0]]||"overview", param=null, tab=null;
+  if(view==="clients"&&parts[1]){ view="client"; param=Number(parts[1]); }
+  if(view==="projects"&&parts[1]){ view="project"; param=Number(parts[1]); }
+  if(view==="settings") tab=parts[1]||"company";
+  let record=null; const r=new URLSearchParams(location.search).get("record");
+  if(r){ const [col,id]=r.split("/"); if(COLS.includes(col)&&id) record={col,id:id==="new"?"new":Number(id)}; }
+  return {view,param,tab,record};
+}
+function urlFor(rt){
+  let p="/"+(PATHS[rt.view]??"");
+  if((rt.view==="client"||rt.view==="project")&&rt.param) p+="/"+rt.param;
+  if(rt.view==="settings") p+="/"+(rt.tab||"company");
+  if(rt.record) p+="?record="+rt.record.col+"/"+rt.record.id;
+  return p;
+}
+const currentRoute=()=>({view:S.view,param:S.param,tab:S.view==="settings"?S.settingsTab:null,
+  record:S.sheet?{col:S.sheet.col,id:S.sheet.id||"new"}:null});
+const pageUrl=(view,param=null)=>urlFor({view,param,tab:view==="settings"?S.settingsTab:null});
+
+function saveScroll(){ try{ history.replaceState({...(history.state||{}),scroll:scrollY},""); }catch(e){} }
+function remember(){ S.lastUrl=location.pathname+location.search; S.lastState=history.state; }
+
+// Go somewhere. Asks before throwing away unsaved panel edits, unless force.
+async function navigate(rt,{replace=false,preset=null,force=false}={}){
+  const leavingRecord=!sameRecord(rt.record,currentRoute().record);
+  if(!force&&leavingRecord&&sheetIsDirty()&&!await confirmDiscard()) return false;
+  const url=urlFor(rt);
+  saveScroll();
+  const state={route:true,preset:preset||null,scroll:0,
+    // a panel opened on top of a page: closing it goes Back instead of adding another entry
+    sheetPushed:rt.record?(replace?!!history.state?.sheetPushed:true):false};
+  if(replace||url===location.pathname+location.search) history.replaceState(state,"",url); else history.pushState(state,"",url);
+  remember();
+  applyRoute(rt,{preset,scrollTop:!replace});
+  return true;
+}
+function go(view,param=null){ return navigate({view,param,tab:view==="settings"?S.settingsTab:null}); }
+function openRecord(col,id,preset={}){ S.sheetOpener=document.activeElement; return navigate({...currentRoute(),record:{col,id:id||"new"}},{preset}); }
+async function closeSheetNav({force=false}={}){
+  if(!S.sheet) return;
+  if(!force&&sheetIsDirty()&&!await confirmDiscard()) return;
+  if(history.state?.sheetPushed){ S.skipDirtyCheck=true; history.back(); }
+  else navigate({...currentRoute(),record:null},{replace:true,force:true});
 }
 
-/* ---------- routing ---------- */
-function go(view,param=null){
-  S.view=view; S.param=param;
-  try{ history.replaceState(null,"","#"+view+(param?"/"+param:"")); }catch(e){}
-  render(); window.scrollTo(0,0);
+// Show what a route describes: the page, plus the record panel if any.
+function applyRoute(rt,{preset=null,scrollTop=false,scrollTo=null}={}){
+  const viewChanged=rt.view!==S.view||rt.param!==S.param||(rt.view==="settings"&&rt.tab!==S.settingsTab);
+  S.view=rt.view; S.param=rt.param; if(rt.view==="settings") S.settingsTab=rt.tab||"company";
+  if(viewChanged) S.viewEnter=true;
+  if($("#main")&&S.ready) doRender();
+  if(S.ready){
+    if(!rt.record){ if(S.sheet) hideSheet(); }
+    else if(!sameRecord(rt.record,currentRoute().record)){
+      if(!showRecord(rt.record.col,rt.record.id==="new"?null:rt.record.id,preset||{})){
+        // the record no longer exists: drop it from the address
+        history.replaceState({...history.state,sheetPushed:false},"",urlFor({...rt,record:null})); remember();
+      }
+    }
+  }
+  document.title=`${rt.record&&S.sheet?sheetTitle()+" · ":""}${TITLES[rt.view==="client"?"clients":rt.view==="project"?"projects":rt.view]||"CRM"} · ${S.settings.companyName||"Company"} CRM`;
+  if(scrollTo!=null) requestAnimationFrame(()=>scrollTo>=0&&window.scrollTo(0,scrollTo));
+  else if(scrollTop&&viewChanged) window.scrollTo(0,0);
+  if(viewChanged&&!rt.record) requestAnimationFrame(()=>$("#main h1")?.focus({preventScroll:true}));
 }
-{ const [v,p]=(location.hash||"").slice(1).split("/"); if(v){ S.view=v; S.param=p?Number(p):null; } }
+const sheetTitle=()=>{ const t=$("#overlay .sheet-head h2"); return t?t.textContent.trim().replace(/\s+/g," ").slice(0,60):""; };
+
+addEventListener("popstate",async e=>{
+  if(!S.ready) return;
+  // Back while a dialog is open just closes the dialog
+  if(S.modal){ S.modal.dismiss(); history.pushState(S.lastState,"",S.lastUrl); return; }
+  const rt=routeFromUrl();
+  if(!S.skipDirtyCheck&&!sameRecord(rt.record,currentRoute().record)&&sheetIsDirty()){
+    history.pushState(S.lastState,"",S.lastUrl); // stay put while asking
+    if(await confirmDiscard()){ S.skipDirtyCheck=true; history.back(); }
+    return;
+  }
+  S.skipDirtyCheck=false;
+  remember();
+  applyRoute(rt,{preset:e.state?.preset,scrollTo:e.state?.scroll??0});
+});
+addEventListener("beforeunload",e=>{
+  if(sheetIsDirty()||Object.keys(S.dirty).length||(S.layoutDraft&&layoutChanged())){ e.preventDefault(); e.returnValue=""; }
+});
+if("scrollRestoration" in history) history.scrollRestoration="manual";
+// links from the earlier version (#leads, #client/3) still work
+if(/^#[a-z]+(\/\d+)?$/.test(location.hash)){ const [v,p]=location.hash.slice(1).split("/"); history.replaceState(null,"",urlFor({view:v,param:p?Number(p):null,tab:null})); }
 
 /* ---------- render shell ---------- */
 function renderRail(){
@@ -201,11 +342,11 @@ function renderRail(){
   const parent={client:"clients",project:"projects"}[S.view]||S.view;
   $("#rail").innerHTML=`<div class="brand">${brandMark(S.settings)}<span class="brand-name">${wordmark((S.settings.companyName||"").toUpperCase())}<small>CRM</small></span></div>`+
     NAV.map(n=>n[0]==="sep"?`<div class="nav-sep"></div>`:
-      `<button class="nav-btn" data-go="${n[0]}" ${parent===n[0]?'aria-current="page"':""}><span>${n[1]}</span>${c[n[0]]!=null?`<span class="count">${c[n[0]]}</span>`:""}</button>`).join("")+
+      `<a class="nav-btn" href="${n[0]==="settings"?"/settings/company":pageUrl(n[0])}" data-go="${n[0]}" ${parent===n[0]?'aria-current="page"':""}><span>${n[1]}</span>${c[n[0]]!=null?`<span class="count">${c[n[0]]}</span>`:""}</a>`).join("")+
     `<div class="rail-foot">${isSuper()&&S.tenants.length?`<label class="label-mono" for="tenant-switch">Working in</label><select class="input" id="tenant-switch" aria-label="Switch company">${S.tenants.map(t=>`<option value="${t.id}" ${t.id===S.tenant?.id?"selected":""}>${esc(t.name)}${t.active?"":" (disabled)"}</option>`).join("")}</select>`:""}<span>${esc(S.me?.name||"")} <span class="tag">${roleLabel(S.me?.role)}</span></span><button data-act="refresh" title="Load the latest changes made by your team">↻ Refresh</button><span class="cell-sub" id="loaded-at">${S.loadedAt?"Updated "+S.loadedAt.toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}):""}</span><button data-act="logout">Sign out</button></div>`;
 }
 function head(title,sub,actions=""){
-  return `<div class="head"><div><h1>${esc(title)}</h1>${sub?`<p>${sub}</p>`:""}</div><div class="toolbar">${actions}</div></div>`;
+  return `<div class="head"><div><h1 tabindex="-1">${esc(title)}</h1>${sub?`<p>${sub}</p>`:""}</div><div class="toolbar">${actions}</div></div>`;
 }
 const addBtn = (label,act) => `<button class="btn primary" data-act="${act}">${esc(label)}</button>`;
 const searchBox = key => `<input class="input search" type="search" id="q-${key}" placeholder="Search…" value="${esc(S.q[key]||"")}" data-search="${key}" aria-label="Search">`;
@@ -223,6 +364,8 @@ function doRender(){
   if(key!==S.dirtyKey){ S.dirty={}; S.dirtyKey=key; }
   const views={overview:viewOverview,leads:viewLeads,clients:viewClients,projects:viewProjects,tasks:viewTasks,quotes:()=>viewDocs("quotes"),invoices:()=>viewDocs("invoices"),expenses:viewExpenses,settings:viewSettings,client:viewClient,project:viewProject};
   main.innerHTML=(views[S.view]||viewOverview)();
+  main.removeAttribute("aria-busy");
+  if(S.viewEnter){ S.viewEnter=false; main.classList.remove("view-enter"); void main.offsetWidth; main.classList.add("view-enter"); }
   // a redraw (e.g. the 30-second refresh) must not wipe what the viewer is typing
   for(const [id,v] of Object.entries(S.dirty)){ const el=document.getElementById(id); if(el&&main.contains(el)) el.value=v; }
   fitLayoutPreview();
@@ -246,7 +389,7 @@ function viewOverview(){
   let h=head("Overview",new Date().toLocaleDateString(undefined,{weekday:"long",day:"numeric",month:"long",year:"numeric"}));
   if(COLS.every(c=>!d[c].length)){
     h+=`<div class="panel" style="margin-bottom:16px"><div class="empty"><strong>Your CRM is ready</strong>Add your company details and team first, then your first lead or client.<br>
-    <span class="toolbar" style="justify-content:center;margin-top:12px">${isAdmin()?`<button class="btn" data-go="settings">Company & team settings</button>`:""}<button class="btn primary" data-act="new-lead">Add a lead</button><button class="btn" data-act="new-client">Add a client</button></span></div></div>`;
+    <span class="toolbar" style="justify-content:center;margin-top:12px">${isAdmin()?`<a class="btn" href="/settings/company" data-go="settings">Company & team settings</a>`:""}<button class="btn primary" data-act="new-lead">Add a lead</button><button class="btn" data-act="new-client">Add a client</button></span></div></div>`;
   }
   h+=`<div class="kpis">
     <div class="panel kpi"><div class="label">Open pipeline</div><div class="value">${money(pipeline)}</div><div class="sub">${openLeads.length} open lead${openLeads.length===1?"":"s"} · win rate ${winRate}</div></div>
@@ -301,7 +444,7 @@ function viewClient(){
   if(!c) return head("Client not found","")+`<button class="btn" data-go="clients">Back to clients</button>`;
   const projects=S.data.projects.filter(p=>p.client_id===c.id), quotes=S.data.quotes.filter(x=>x.client_id===c.id), invs=S.data.invoices.filter(x=>x.client_id===c.id);
   const due=invs.filter(i=>!["Draft","Void"].includes(i.status)).reduce((s,i)=>s+totals(i).balance,0);
-  let h=head(c.company||c.name,`<button class="btn ghost sm" data-go="clients">← All clients</button>`,
+  let h=head(c.company||c.name,`<a class="btn ghost sm" href="/clients" data-go="clients">← All clients</a>`,
     `<button class="btn" data-open="clients:${c.id}">Edit</button><button class="btn" data-act="new-project" data-client="${c.id}">New project</button><button class="btn" data-act="new-quotes" data-client="${c.id}">New quotation</button><button class="btn primary" data-act="new-invoices" data-client="${c.id}">New invoice</button>`);
   const cells=[["Contact",esc(c.name||"—")],["Email",esc(c.email||"—")],["Phone",esc(c.phone||"—")],["Region",esc(c.region||"—")],["Ref",esc(c.ref||"—")],["Address",esc(c.address||"—")],["GSTIN / Tax no.",esc(c.tax_id||"—")],["Outstanding",`<span class="num">${money(due)}</span>`],["Added by",`${esc(userName(c.created_by))} · ${fmtDate(c.created_at)}`]];
   h+=`<div class="panel" style="margin-bottom:16px"><dl class="detail-grid">${cells.map(([k,v])=>`<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>${c.notes?`<div style="padding:0 16px 16px;white-space:pre-wrap;color:var(--muted)">${esc(c.notes)}</div>`:""}</div><div class="grid2">`;
@@ -328,8 +471,8 @@ function viewProject(){
   const tasks=S.data.tasks.filter(t=>t.project_id===p.id), pr=projProgress(p);
   const spent=S.data.expenses.filter(e=>e.project_id===p.id).reduce((a,e)=>a+num(e.amount),0);
   const billed=S.data.invoices.filter(i=>i.project_id===p.id&&!["Draft","Void"].includes(i.status)).reduce((s,i)=>s+totals(i).total,0);
-  let h=head(p.name,`<button class="btn ghost sm" data-go="projects">← All projects</button>`,`<button class="btn" data-open="projects:${p.id}">Edit</button><button class="btn" data-act="new-invoices" data-client="${p.client_id||""}" data-project="${p.id}">Invoice this project</button><button class="btn" data-act="new-expense">Add expense</button><button class="btn primary" data-act="new-task" data-project="${p.id}">Add task</button>`);
-  const cells=[["Client",p.client_id?`<a href="#" data-go-detail="client:${p.client_id}">${esc(clientName(p.client_id))}</a>`:"Internal"],["Status",pill(p.status||"Planning")],["Project lead",esc(p.owner_id?userName(p.owner_id):"—")],["Start",fmtDate(p.start_date)],["Due",fmtDate(p.due_date)],["Budget",`<span class="num">${p.budget?money(p.budget):"—"}</span>`],["Expenses",`<span class="num" style="${p.budget&&spent>p.budget?"color:var(--bad)":""}">${money(spent)}</span>${p.budget?` <span class="cell-sub">of ${money(p.budget)} budget</span>`:""}`],["Invoiced",`<span class="num">${money(billed)}</span>`],["Progress",`${pr.pct}% <span class="cell-sub">(${pr.done} of ${pr.n} tasks)</span>`]];
+  let h=head(p.name,`<a class="btn ghost sm" href="/projects" data-go="projects">← All projects</a>`,`<button class="btn" data-open="projects:${p.id}">Edit</button><button class="btn" data-act="new-invoices" data-client="${p.client_id||""}" data-project="${p.id}">Invoice this project</button><button class="btn" data-act="new-expense">Add expense</button><button class="btn primary" data-act="new-task" data-project="${p.id}">Add task</button>`);
+  const cells=[["Client",p.client_id?`<a href="/clients/${p.client_id}" data-go-detail="client:${p.client_id}">${esc(clientName(p.client_id))}</a>`:"Internal"],["Status",pill(p.status||"Planning")],["Project lead",esc(p.owner_id?userName(p.owner_id):"—")],["Start",fmtDate(p.start_date)],["Due",fmtDate(p.due_date)],["Budget",`<span class="num">${p.budget?money(p.budget):"—"}</span>`],["Expenses",`<span class="num" style="${p.budget&&spent>p.budget?"color:var(--bad)":""}">${money(spent)}</span>${p.budget?` <span class="cell-sub">of ${money(p.budget)} budget</span>`:""}`],["Invoiced",`<span class="num">${money(billed)}</span>`],["Progress",`${pr.pct}% <span class="cell-sub">(${pr.done} of ${pr.n} tasks)</span>`]];
   h+=`<div class="panel" style="margin-bottom:16px"><dl class="detail-grid">${cells.map(([k,v])=>`<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>${p.description?`<div style="padding:0 16px 16px;white-space:pre-wrap;color:var(--muted)">${esc(p.description)}</div>`:""}</div>`;
   return h+(tasks.length?taskBoard(tasks):`<div class="panel">${emptyState("No tasks in this project","Break the work into tasks and assign them to people on your team.","Add a task","new-task")}</div>`);
 }
@@ -580,10 +723,29 @@ function fieldHtml([key,label,type="text",o={}],rec){
   return `<div class="${cls}">${lab}<input class="input" id="${id}" name="${key}" type="${type}" value="${esc(v)}" placeholder="${esc(o.ph||"")}" ${type==="number"?'step="any"':""} ${o.req?"required":""}></div>`;
 }
 function openSheet(html,wide=false){
-  $("#overlay").innerHTML=`<div class="scrim" data-close></div><aside class="sheet ${wide?"wide":""}" role="dialog" aria-modal="true">${html}</aside>`;
-  const first=$("#overlay .sheet-body input:not([type=hidden]),#overlay .sheet-body select,#overlay .sheet-body textarea"); first?.focus();
+  clearTimeout(S.sheetHideT);
+  $("#overlay").innerHTML=`<div class="scrim" data-close></div><aside class="sheet ${wide?"wide":""}" role="dialog" aria-modal="true" aria-labelledby="sheet-title">${html}</aside>`;
+  const first=$("#overlay .sheet-body input:not([type=hidden]),#overlay .sheet-body select,#overlay .sheet-body textarea");
+  (first||$("#overlay .sheet [data-close]"))?.focus({preventScroll:true});
 }
-function closeSheet(){ if($("#overlay")) $("#overlay").innerHTML=""; S.sheet=null; }
+// Slide the panel out and give focus back to whatever opened it.
+function hideSheet(){
+  const ov=$("#overlay"); if(!ov) return;
+  S.sheet=null;
+  ov.querySelector(".sheet")?.classList.add("closing"); ov.querySelector(".scrim")?.classList.add("closing");
+  clearTimeout(S.sheetHideT);
+  S.sheetHideT=setTimeout(()=>{ if(!S.sheet) ov.innerHTML=""; },180);
+  const o=S.sheetOpener; S.sheetOpener=null;
+  if(o&&o.isConnected) o.focus({preventScroll:true});
+}
+// Has the open panel been edited since it opened (or was last saved)?
+function sheetSnapshot(){
+  if(!S.sheet) return "";
+  if(S.sheet.doc) return JSON.stringify(docBody(S.sheet.doc));
+  const f=$("#rec-form"); return f?JSON.stringify(readForm(f)):"";
+}
+const sheetIsDirty=()=>!!S.sheet&&S.sheet.snap!=null&&sheetSnapshot()!==S.sheet.snap;
+const markSheetClean=()=>{ if(S.sheet) S.sheet.snap=sheetSnapshot(); };
 
 function metaStrip(rec){
   if(!rec.id) return "";
@@ -593,22 +755,27 @@ async function loadHistory(col,id){
   const box=$("#history"); if(!box) return;
   try{ const rows=await api("GET",`/api/activity/${col}/${id}`);
     if(!$("#history")) return;
+    box.removeAttribute("aria-busy");
     box.innerHTML=rows.length?`<ul class="history">${rows.map(a=>`<li>${esc(a.summary)}<br><span class="cell-sub">${esc(userName(a.user_id))} · ${fmtDateTime(a.at)}</span></li>`).join("")}</ul>`:`<p class="hint">No history yet.</p>`;
   }catch(e){ box.innerHTML=`<p class="hint">History could not be loaded.</p>`; }
 }
-function openRecord(col,id,preset={}){
+// Draw a record's panel (called by the router). Returns false if the record doesn't exist.
+function showRecord(col,id,preset={}){
   if(col==="quotes"||col==="invoices") return openDocEditor(col,id,preset);
-  const F=FORMS[col]; if(id&&!byId(col,id)) return toast("This record no longer exists.");
+  const F=FORMS[col]; if(!F) return false;
+  if(id&&!byId(col,id)){ hideSheet(); toast("That record no longer exists."); return false; }
   const rec=id?{...byId(col,id)}:{...preset};
   if(!id){ if(col==="leads"){ rec.stage??="New"; rec.owner_id??=S.me.id; } if(col==="projects") rec.status??="Planning"; if(col==="expenses"){ rec.date??=todayISO(); rec.paid_by??=S.me.id; } if(col==="tasks"){ rec.status??="To do"; rec.priority??="Medium"; } }
   S.sheet={col,id:id?Number(id):null};
   const canDelete=id&&(isAdmin()||rec.created_by===S.me.id);
   let extra="";
   if(col==="leads"&&id) extra+=`<button type="button" class="btn" data-act="convert-lead">${rec.client_id&&byId("clients",rec.client_id)?"View client":"Convert to client"}</button>`;
-  openSheet(`<form id="rec-form" style="display:contents" novalidate><div class="sheet-head"><h2>${id?esc(rec.name||rec.title||rec.description):"New "+F.title}</h2><button type="button" class="btn ghost" data-close aria-label="Close">✕</button></div>
-  <div class="sheet-body">${metaStrip(rec)}<div class="form">${F.fields.map(f=>fieldHtml(f,rec)).join("")}</div>${id?`<h3 class="sub-head">History</h3><div id="history"><p class="hint">Loading…</p></div>`:""}</div>
+  openSheet(`<form id="rec-form" style="display:contents" novalidate><div class="sheet-head"><h2 id="sheet-title">${id?esc(rec.name||rec.title||rec.description):"New "+F.title}</h2><button type="button" class="btn ghost" data-close aria-label="Close">✕</button></div>
+  <div class="sheet-body">${metaStrip(rec)}<div class="form">${F.fields.map(f=>fieldHtml(f,rec)).join("")}</div>${id?`<h3 class="sub-head">History</h3><div id="history" aria-busy="true"><div class="skel-lines"><i></i><i></i><i></i></div></div>`:""}</div>
   <div class="sheet-foot"><div class="grp">${canDelete?`<button type="button" class="btn danger" data-act="delete-rec">Delete</button>`:""}${extra}</div><div class="grp"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">${id?"Save changes":"Create "+F.title}</button></div></div></form>`);
+  markSheetClean();
   if(id) loadHistory(col,id);
+  return true;
 }
 function readForm(form){
   const out={};
@@ -623,7 +790,7 @@ function readForm(form){
 function openDocEditor(col,id,preset={}){
   const isQ=col==="quotes", s=S.settings, t=todayISO();
   let d;
-  if(id){ const ex=byId(col,id); if(!ex) return toast("This record no longer exists."); d=JSON.parse(JSON.stringify(ex)); }
+  if(id){ const ex=byId(col,id); if(!ex){ hideSheet(); toast("That record no longer exists."); return false; } d=JSON.parse(JSON.stringify(ex)); }
   else d={number:nextNumber(col,isQ?(s.quotePrefix||"QT-"):(s.invoicePrefix||"INV-")),date:t,status:"Draft",
     [isQ?"valid_until":"due_date"]:addDays(t,num(isQ?(s.quoteDays??30):(s.paymentDays??14))),tax_rate:num(s.taxRate),discount:0,
     items:[{desc:"",qty:1,rate:0}],notes:s.terms||"",payments:[],ref:"",...preset};
@@ -631,6 +798,8 @@ function openDocEditor(col,id,preset={}){
   d.payments=d.payments||[];
   S.sheet={col,id:id?Number(id):null,doc:d,tab:"edit"};
   drawDocEditor();
+  markSheetClean();
+  return true;
 }
 function drawDocEditor(){
   const {col,doc:d,id,tab}=S.sheet, isQ=col==="quotes", isNew=!id;
@@ -671,7 +840,7 @@ function drawDocEditor(){
   S.sheet.payReset=false;
   if(!$("#overlay .sheet")) openSheet("",true);
   const sheet=$("#overlay .sheet"); sheet.classList.add("wide");
-  sheet.innerHTML=`<div class="sheet-head"><h2><span class="mono">${esc(d.number)}</span> ${isNew?`<span class="cell-sub">new ${isQ?"quotation":"invoice"}</span>`:pill(status)}</h2><div class="toolbar"><div class="seg"><button type="button" data-tab="edit" aria-pressed="${tab==="edit"}">Edit</button><button type="button" data-tab="preview" aria-pressed="${tab==="preview"}">Preview</button></div><button type="button" class="btn ghost" data-close aria-label="Close">✕</button></div></div>
+  sheet.innerHTML=`<div class="sheet-head"><h2 id="sheet-title"><span class="mono">${esc(d.number)}</span> ${isNew?`<span class="cell-sub">new ${isQ?"quotation":"invoice"}</span>`:pill(status)}</h2><div class="toolbar"><div class="seg"><button type="button" data-tab="edit" aria-pressed="${tab==="edit"}">Edit</button><button type="button" data-tab="preview" aria-pressed="${tab==="preview"}">Preview</button></div><button type="button" class="btn ghost" data-close aria-label="Close">✕</button></div></div>
   <div class="sheet-body">${body}</div>
   <div class="sheet-foot"><div class="grp">${actions.join("")}</div><div class="grp"><button type="button" class="btn" data-close>Close</button><button type="button" class="btn primary" data-act="save-doc">${isNew?"Create":"Save changes"}</button></div></div>`;
   for(const [id,v] of Object.entries(keep)){ const el=document.getElementById(id); if(el) el.value=v; }
@@ -736,20 +905,39 @@ function exportCsv(col){
 }
 
 /* ---------- events ---------- */
-document.addEventListener("click",async e=>{
-  const el=e.target.closest("[data-go],[data-go-detail],[data-open],[data-act],[data-close],[data-mode],[data-tab],[data-stab],[data-add-item],[data-del-item],[data-del-pay],[data-user-role],[data-user-active],[data-user-reset],[data-tenant-open],[data-tenant-active],[data-tpl],[data-lkind]");
-  if(!el) return;
-  if(el.dataset.go){ e.preventDefault(); closeSheet(); return go(el.dataset.go); }
-  if(el.dataset.goDetail){ e.preventDefault(); const [v,id]=el.dataset.goDetail.split(":"); closeSheet(); return go(v,Number(id)); }
+const CLICKABLE="[data-go],[data-go-detail],[data-open],[data-act],[data-close],[data-mode],[data-tab],[data-stab],[data-add-item],[data-del-item],[data-del-pay],[data-user-role],[data-user-active],[data-user-reset],[data-tenant-open],[data-tenant-active],[data-tpl],[data-lkind]";
+// Where a clickable page/record element leads, so it can open in a new tab like a link.
+function targetUrl(el){
+  if(el.dataset.go) return pageUrl(el.dataset.go);
+  if(el.dataset.goDetail){ const [v,id]=el.dataset.goDetail.split(":"); return pageUrl(v,Number(id)); }
+  if(el.dataset.open){ const [c,id]=el.dataset.open.split(":"); return urlFor({...currentRoute(),record:{col:c,id:Number(id)}}); }
+  return null;
+}
+document.addEventListener("click",e=>{
+  const el=e.target.closest(CLICKABLE); if(!el) return;
+  const url=targetUrl(el);
+  if(url&&(e.metaKey||e.ctrlKey||e.shiftKey)){ if(el.tagName!=="A"){ e.preventDefault(); window.open(url,"_blank","noopener"); } return; }
+  if(el.tagName==="A") e.preventDefault();
+  const p=handleClick(e,el);
+  if(el.tagName==="BUTTON") busyWhile(el,p);
+});
+// middle-click on a row or card opens it in a new tab
+document.addEventListener("auxclick",e=>{
+  if(e.button!==1) return; const el=e.target.closest(CLICKABLE); if(!el||el.tagName==="A") return;
+  const url=targetUrl(el); if(url){ e.preventDefault(); window.open(url,"_blank","noopener"); }
+});
+async function handleClick(e,el){
+  if(el.dataset.go) return go(el.dataset.go);
+  if(el.dataset.goDetail){ const [v,id]=el.dataset.goDetail.split(":"); return go(v,Number(id)); }
   if(el.dataset.open){ const [c,id]=el.dataset.open.split(":"); return openRecord(c,Number(id)); }
-  if(el.hasAttribute("data-close")) return closeSheet();
+  if(el.hasAttribute("data-close")) return closeSheetNav();
   if(el.dataset.mode){ const [k,m]=el.dataset.mode.split(":"); S.mode[k]=m; try{localStorage.setItem("crm.mode",JSON.stringify(S.mode));}catch(_){} return render(); }
-  if(el.dataset.stab){ S.settingsTab=el.dataset.stab; return render(); }
+  if(el.dataset.stab) return navigate({view:"settings",tab:el.dataset.stab});
   if(el.dataset.tab){ S.sheet.tab=el.dataset.tab; return drawDocEditor(); }
   if(el.hasAttribute("data-add-item")){ S.sheet.doc.items.push({desc:"",qty:1,rate:0}); drawDocEditor(); $(`#it-desc-${S.sheet.doc.items.length-1}`)?.focus(); return; }
   if(el.dataset.delItem){ S.sheet.doc.items.splice(+el.dataset.delItem,1); return drawDocEditor(); }
   if(el.dataset.delPay){ const d=S.sheet.doc; d.payments.splice(+el.dataset.delPay,1);
-    const rec=await update("invoices",S.sheet.id,{...docBody(d),_activity:`Removed a payment from ${d.number}`}); if(rec){ toast("Payment removed"); S.sheet.doc=JSON.parse(JSON.stringify(rec)); S.sheet.payReset=true; drawDocEditor(); } return; }
+    const rec=await update("invoices",S.sheet.id,{...docBody(d),_activity:`Removed a payment from ${d.number}`}); if(rec){ toast("Payment removed"); S.sheet.doc=JSON.parse(JSON.stringify(rec)); S.sheet.payReset=true; drawDocEditor(); markSheetClean(); } return; }
   if(el.dataset.tpl){ layoutDraft().template=el.dataset.tpl;
     // the GST format reads best with its usual Indian defaults switched on
     if(el.dataset.tpl==="gst"){ Object.assign(layoutDraft(),{showHsn:true,showWords:true,taxDisplay:layoutDraft().taxDisplay==="single"?"cgst_sgst":layoutDraft().taxDisplay}); return render(); }
@@ -769,7 +957,7 @@ document.addEventListener("click",async e=>{
   const a=el.dataset.act;
   if(a==="save-layout"){ try{ S.settings=await api("PUT","/api/settings",{docLayout:layoutDraft()}); S.layoutDraft=null; render(); toast("Layout saved. New and existing documents use it."); }catch(err){ toast(err.message); } return; }
   if(a==="reset-layout"){ S.layoutDraft={...DocTemplates.LAYOUT_DEFAULTS}; return render(); }
-  if(a==="refresh"){ el.disabled=true; try{ await loadAll(); toast("Up to date"); }catch(err){ toast(err.message); } finally{ el.disabled=false; } return; }
+  if(a==="refresh"){ try{ await loadAll(); toast("Up to date"); }catch(err){ toast(err.message); } return; }
   if(a==="logout"){ try{ await api("POST","/api/logout"); }catch(_){} location.reload(); return; }
   if(a==="new-lead") return openRecord("leads");
   if(a==="new-client") return openRecord("clients");
@@ -780,32 +968,42 @@ document.addEventListener("click",async e=>{
     return openRecord(col,null,{client_id:Number(el.dataset.client)||null,project_id:Number(el.dataset.project)||null}); }
   if(a&&a.startsWith("csv-")) return exportCsv(a.slice(4));
   if(a==="remove-logo"){ try{ S.settings=await api("PUT","/api/settings",{logo:""}); applyBrand(S.settings); render(); toast("Logo removed"); }catch(err){ toast(err.message); } return; }
-  if(a==="delete-rec"){ const {col,id}=S.sheet; if(await confirmBox(`Delete this ${FORMS[col].title}?`,"This removes it for everyone and cannot be undone.")){ if(await remove(col,id)){ closeSheet(); toast("Deleted"); } } return; }
+  if(a==="delete-rec"){ const {col,id}=S.sheet; if(await confirmBox(`Delete this ${FORMS[col].title}?`,"This removes it for everyone and cannot be undone.")){ if(await remove(col,id)){ closeSheetNav({force:true}); toast("Deleted"); } } return; }
   if(a==="convert-lead"){ const lead=byId("leads",S.sheet.id);
-    if(lead.client_id&&byId("clients",lead.client_id)){ closeSheet(); return go("client",lead.client_id); }
+    if(lead.client_id&&byId("clients",lead.client_id)) return navigate({view:"client",param:lead.client_id});
     const c=await create("clients",{name:lead.name,company:lead.company||"",email:lead.email||"",phone:lead.phone||"",region:lead.region||"",ref:lead.ref||"",notes:lead.notes||"",from_lead:lead.id});
-    if(c){ await update("leads",lead.id,{stage:"Won",client_id:c.id,_activity:`Converted ${lead.name} to a client`}); closeSheet(); toast("Client created and lead marked as won"); go("client",c.id); } return; }
+    if(c){ await update("leads",lead.id,{stage:"Won",client_id:c.id,_activity:`Converted ${lead.name} to a client`}); toast("Client created and lead marked as won"); navigate({view:"client",param:c.id},{force:true}); } return; }
   if(a==="save-doc"){ const {col,id,doc}=S.sheet;
     if(!doc.client_id){ toast("Choose a client."); $("#d-client")?.focus(); return; }
     if(!doc.number){ toast("Enter a document number."); return; }
     const rec=id?await update(col,id,docBody(doc)):await create(col,docBody(doc));
-    if(rec){ toast(id?"Saved":"Created"); S.sheet.id=rec.id; S.sheet.doc=JSON.parse(JSON.stringify(rec)); if(!S.sheet.doc.items.length) S.sheet.doc.items=[{desc:"",qty:1,rate:0}]; drawDocEditor(); } return; }
-  if(a==="delete-doc"){ const {col,id}=S.sheet; if(await confirmBox(`Delete ${S.sheet.doc.number}?`,"This removes it for everyone and cannot be undone.")){ if(await remove(col,id)){ closeSheet(); toast("Deleted"); } } return; }
+    if(rec){ toast(id?"Saved":"Created"); S.sheet.id=rec.id; S.sheet.doc=JSON.parse(JSON.stringify(rec)); if(!S.sheet.doc.items.length) S.sheet.doc.items=[{desc:"",qty:1,rate:0}]; drawDocEditor(); markSheetClean();
+      if(!id) navigate(currentRoute(),{replace:true,force:true}); } return; }
+  if(a==="delete-doc"){ const {col,id}=S.sheet; if(await confirmBox(`Delete ${S.sheet.doc.number}?`,"This removes it for everyone and cannot be undone.")){ if(await remove(col,id)){ closeSheetNav({force:true}); toast("Deleted"); } } return; }
   if(a==="add-payment"){ const amt=num($("#p-amount").value); if(amt<=0){ toast("Enter a payment amount."); return; }
     const d=S.sheet.doc; d.payments=[...d.payments,{date:$("#p-date").value||todayISO(),amount:amt,method:$("#p-method").value,ref:$("#p-ref").value.trim(),by:S.me.id}];
     if(d.status==="Draft") d.status="Sent";
     const rec=await update("invoices",S.sheet.id,{...docBody(d),_activity:`Recorded payment of ${money(amt)} on ${d.number}`});
-    if(rec){ toast("Payment recorded"); S.sheet.doc=JSON.parse(JSON.stringify(rec)); S.sheet.payReset=true; drawDocEditor(); } return; }
+    if(rec){ toast("Payment recorded"); S.sheet.doc=JSON.parse(JSON.stringify(rec)); S.sheet.payReset=true; drawDocEditor(); markSheetClean(); } return; }
   if(a==="quote-to-invoice"){ const q=S.sheet.doc, s=S.settings;
     const inv={number:nextNumber("invoices",s.invoicePrefix||"INV-"),client_id:q.client_id,project_id:q.project_id,title:q.title,ref:q.ref,date:todayISO(),due_date:addDays(todayISO(),num(s.paymentDays??14)),status:"Draft",items:q.items,discount:q.discount,tax_rate:q.tax_rate,notes:q.notes,payments:[],from_quote:S.sheet.id};
     const rec=await create("invoices",docBody(inv));
-    if(rec){ await update("quotes",S.sheet.id,{status:"Accepted",invoice_id:rec.id,_activity:`Converted ${q.number} to invoice ${rec.number}`}); toast(`Invoice ${rec.number} created`); openDocEditor("invoices",rec.id); } return; }
+    if(rec){ await update("quotes",S.sheet.id,{status:"Accepted",invoice_id:rec.id,_activity:`Converted ${q.number} to invoice ${rec.number}`}); toast(`Invoice ${rec.number} created`); navigate({...currentRoute(),record:{col:"invoices",id:rec.id}},{replace:true,force:true}); } return; }
   if(a==="print-doc"){ setPageSize(savedLayout()); S.sheet.tab="preview"; drawDocEditor(); document.body.classList.add("printing"); setTimeout(()=>{ window.print(); document.body.classList.remove("printing"); },50); return; }
   if(a==="download-doc"){ const {col,doc}=S.sheet;
     const css=await fetch("/app.css").then(r=>r.text()).catch(()=>"");
     const page=`<!doctype html><html><head><meta charset="utf-8"><title>${esc(doc.number)}</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700;800&family=Source+Serif+4:wght@300;400;600;700&display=swap"><style>${css}\nbody{background:#fff;padding:24px}.doc{max-width:794px;margin:auto;border:0}@page{size:${savedLayout().paper==="Letter"?"letter":"A4"};margin:10mm}@media print{body{padding:0}}</style></head><body>${docPaper(col,doc)}</body></html>`;
     return saveFile(`${doc.number}.html`,page,"text/html"); }
-});
+}
+
+// While an action talks to the server, its button shows a spinner and can't be pressed twice.
+function busyWhile(btn,p){
+  if(!p||typeof p.then!=="function") return;
+  let done=false; btn.disabled=true;
+  const t=setTimeout(()=>{ if(!done&&S.inflight>0){ btn.classList.add("is-busy"); btn.setAttribute("aria-busy","true"); } },120);
+  const end=()=>{ done=true; clearTimeout(t); btn.disabled=false; btn.classList.remove("is-busy"); btn.removeAttribute("aria-busy"); };
+  p.then(end,end);
+}
 
 function trackDirty(el){
   if(el.dataset.l||el.dataset.lPick) return; // layout editor keeps its own draft
@@ -845,16 +1043,24 @@ document.addEventListener("change",async e=>{
     try{ S.settings=await api("PUT","/api/settings",{logo:dataUrl}); applyBrand(S.settings); render(); toast("Logo updated"); }catch(err){ toast(err.message); }
   }
 });
-document.addEventListener("keydown",e=>{ if(e.key==="Escape"&&!$(".modal")&&S.sheet) closeSheet(); });
+document.addEventListener("keydown",e=>{
+  if(S.modal||!S.sheet) return;
+  if(e.key==="Escape"){ e.preventDefault(); return closeSheetNav(); }
+  const sh=$("#overlay .sheet"); if(sh) trapFocus(e,sh);
+});
 
-document.addEventListener("submit",async e=>{
+document.addEventListener("submit",e=>{
   e.preventDefault();
+  const btn=e.submitter||e.target.querySelector('[type="submit"]');
+  const p=handleSubmit(e); if(btn) busyWhile(btn,p);
+});
+async function handleSubmit(e){
   const form=e.target;
   if(form.id==="rec-form"){
     const {col,id}=S.sheet; const vals=readForm(form);
     const req=FORMS[col].fields.find(f=>f[3]?.req&&!vals[f[0]]); if(req){ toast(`${req[1]} is required.`); $("#f-"+req[0])?.focus(); return; }
     const rec=id?await update(col,id,vals):await create(col,vals);
-    if(rec){ closeSheet(); toast(id?"Saved":"Created"); }
+    if(rec){ closeSheetNav({force:true}); toast(id?"Saved":"Created"); }
   }
   if(form.hasAttribute("data-settings-form")){
     const body={};
@@ -875,10 +1081,12 @@ document.addEventListener("submit",async e=>{
     const body={name:$("#m-name").value}; if($("#m-new").value){ body.password=$("#m-new").value; body.currentPassword=$("#m-cur").value; }
     try{ await api("PUT","/api/me",body); clearDirty(form); await loadAll(); toast("Account saved"); }catch(err){ toast(err.message); }
   }
-});
+}
 
 async function switchTenant(id){
-  try{ await api("POST","/api/admin/switch",{tenant_id:id}); S.layoutDraft=null; closeSheet(); S.leadRegion=""; await loadAll(); go(S.view==="settings"?"settings":"overview"); toast(`Now working in ${S.tenant?.name||"that company"}`); }
+  if(sheetIsDirty()&&!await confirmDiscard()){ render(); return; }
+  try{ await api("POST","/api/admin/switch",{tenant_id:id}); S.layoutDraft=null; S.leadRegion=""; await loadAll();
+    await navigate({view:S.view==="settings"?"settings":"overview",tab:S.settingsTab},{force:true}); toast(`Now working in ${S.tenant?.name||"that company"}`); }
   catch(err){ toast(err.message); }
 }
 
@@ -890,7 +1098,9 @@ document.addEventListener("dragleave",e=>{ const col=e.target.closest?.("[data-d
 document.addEventListener("drop",async e=>{
   const col=e.target.closest?.("[data-drop]"); if(!col||!dragId) return; e.preventDefault(); col.classList.remove("drop");
   const [c,field,val]=col.dataset.drop.split(":"); const rec=byId(c,dragId); dragId=null;
-  if(rec&&rec[field]!==val) await update(c,rec.id,{[field]:val});
+  if(!rec||rec[field]===val) return;
+  const before=rec[field]; rec[field]=val; render();
+  if(!await update(c,rec.id,{[field]:val})){ rec[field]=before; render(); }
 });
 document.addEventListener("dragend",()=>{ dragId=null; document.querySelectorAll(".col.drop").forEach(x=>x.classList.remove("drop")); });
 
