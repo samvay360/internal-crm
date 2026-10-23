@@ -27,6 +27,42 @@ const FONTS = {
 const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const ml = v => esc(v).replace(/\n/g, "<br>");
 
+/* Small Markdown subset for notes & terms. Input is escaped first, so no raw HTML gets through.
+ * Supports: # headings, **bold**, *italic*, `code`, - bullets, 1. numbers, | tables |, --- rules. */
+const mdInline = t => esc(t)
+  .replace(/`([^`]+)`/g, "<code>$1</code>")
+  .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+  .replace(/(^|[^*\w])\*([^*\s][^*]*?)\*(?![*\w])/g, "$1<em>$2</em>")
+  .replace(/(^|[^\w])_([^_\s][^_]*?)_(?![\w])/g, "$1<em>$2</em>");
+function md(src) {
+  const lines = String(src ?? "").replace(/\r/g, "").split("\n"), out = [];
+  const cells = l => l.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+  let i = 0;
+  while (i < lines.length) {
+    const l = lines[i];
+    if (!l.trim()) { i++; continue; }
+    let m;
+    if ((m = l.match(/^\s*(#{1,4})\s+(.*)$/))) { out.push(`<div class="d-md-h d-md-h${m[1].length}">${mdInline(m[2])}</div>`); i++; continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) { out.push("<hr>"); i++; continue; }
+    if (/^\s*[-*+]\s+/.test(l) || /^\s*\d+[.)]\s+/.test(l)) {
+      const ord = /^\s*\d+[.)]\s+/.test(l), re = ord ? /^\s*\d+[.)]\s+/ : /^\s*[-*+]\s+/, items = [];
+      while (i < lines.length && re.test(lines[i])) items.push(`<li>${mdInline(lines[i++].replace(re, ""))}</li>`);
+      out.push(`<${ord ? "ol" : "ul"}>${items.join("")}</${ord ? "ol" : "ul"}>`); continue;
+    }
+    if (l.includes("|") && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1])) {
+      const head = cells(l); i += 2; const rows = [];
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) rows.push(cells(lines[i++]));
+      out.push(`<table class="d-md-table"><thead><tr>${head.map(c => `<th>${mdInline(c)}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${mdInline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`);
+      continue;
+    }
+    const para = [];
+    while (i < lines.length && lines[i].trim() && !/^\s*(#{1,4}\s|[-*+]\s|\d+[.)]\s)/.test(lines[i]) && !/^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[i]) && !(lines[i].includes("|") && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1] || ""))) para.push(mdInline(lines[i++]));
+    if (!para.length) para.push(mdInline(lines[i++]));
+    out.push(`<p>${para.join("<br>")}</p>`);
+  }
+  return `<div class="d-md">${out.join("")}</div>`;
+}
+
 /* ---------- amount in words (Indian numbering: thousand, lakh, crore) ---------- */
 const ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve",
   "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
@@ -90,14 +126,15 @@ function totalsRows(m, L) {
   if (t.paid > 0) rows.push(["Paid", "−" + m.money(t.paid)], ["Balance due", m.money(t.balance), "grand"]);
   return rows;
 }
-const totalsBlock = (m, L, cls = "d-totals") =>
+const totalsBlock = (m, L, cls = "d-totals") => m.body != null && !m.totals.total ? "" :
   `<div class="${cls}">${totalsRows(m, L).map(([k, v, c]) => `<div class="d-trow ${c || ""}"><span>${k}</span><span class="d-num">${v}</span></div>`).join("")}</div>`;
 function itemsTable(m, L, { serial = false } = {}) {
+  if (m.body != null) return `<div class="d-body">${md(m.body)}</div>`;
   const head = `<tr>${serial ? `<th class="d-sr">#</th>` : ""}<th>Description</th>${L.showHsn ? "<th>HSN/SAC</th>" : ""}<th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr>`;
   const rows = m.items.map((i, n) => `<tr>${serial ? `<td class="d-sr">${n + 1}</td>` : ""}<td>${esc(i.desc)}</td>${L.showHsn ? `<td>${esc(i.hsn || "")}</td>` : ""}<td class="r d-num">${i.qty}</td><td class="r d-num">${m.money(i.rate)}</td><td class="r d-num">${m.money(i.amount)}</td></tr>`).join("");
   return `<div class="d-table-wrap"><table class="d-items"><thead>${head}</thead><tbody>${rows || `<tr><td colspan="6" class="d-muted">No items</td></tr>`}</tbody></table></div>`;
 }
-const words = (m, L) => L.showWords ? `<div class="d-words"><span class="d-lbl">Amount in words</span>${esc(amountInWords(m.totals.total, m.currency))}</div>` : "";
+const words = (m, L) => L.showWords && !(m.body != null && !m.totals.total) ? `<div class="d-words"><span class="d-lbl">Amount in words</span>${esc(amountInWords(m.totals.total, m.currency))}</div>` : "";
 const bank = (m, L) => m.kind === "invoice" && L.showBank && m.bank ? `<div class="d-block"><div class="d-lbl">Payment details</div>${ml(m.bank)}</div>` : "";
 const notes = (m, L) => L.showNotes && m.notes ? `<div class="d-block"><div class="d-lbl">Notes &amp; terms</div>${ml(m.notes)}</div>` : "";
 const signature = (m, L) => L.showSignature ? `<div class="d-sign"><div>For <b>${esc(m.seller.name)}</b></div><div class="d-sign-line"></div><div>${esc(L.signatureLabel || "Authorised Signatory")}</div></div>` : "";

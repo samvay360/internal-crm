@@ -42,6 +42,7 @@ a{color:var(--accent)}
 .rail{background:var(--rail);backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:var(--r);margin:12px 0 12px 12px;
   padding:16px 12px;display:flex;flex-direction:column;gap:2px;position:sticky;top:12px;height:calc(100vh - 24px);overflow:auto;box-shadow:0 1px 2px rgba(0,0,0,.04)}
 .brand{display:flex;align-items:center;gap:10px;padding:4px 8px 18px;min-width:0}
+.burger{display:none}
 .brand-mark{width:30px;height:30px;border-radius:8px;background:var(--ink);display:grid;place-items:center;color:var(--ink-fg);font-family:var(--font-num);font-size:12px;flex:none;overflow:hidden}
 .brand-mark img{width:100%;height:100%;object-fit:contain;background:#fff}
 .brand-name{font-weight:800;letter-spacing:-.01em;font-size:15px;line-height:1.15;min-width:0;overflow-wrap:anywhere}
@@ -227,6 +228,20 @@ td.r,th.r{text-align:right}
 .doc .d-words{font-style:italic}
 .doc .d-words .d-lbl{font-style:normal}
 .doc .d-block{margin-top:12px}
+.doc .d-body{margin:14px 0}
+.doc .d-md p{margin:0 0 6px}.doc .d-md>:last-child{margin-bottom:0}
+.doc .d-md ul,.doc .d-md ol{margin:0 0 6px;padding-left:20px}
+.doc .d-md hr{border:0;border-top:1px solid var(--rule);margin:8px 0}
+.doc .d-md code{font-family:var(--font-num);font-size:.9em;background:rgba(0,0,0,.06);padding:0 3px;border-radius:3px}
+.doc .d-md-h{font-weight:700;margin:8px 0 3px}.doc .d-md-h1{font-size:1.2em}.doc .d-md-h2{font-size:1.1em}
+.doc .d-md-table{width:100%;border-collapse:collapse;margin:4px 0 8px;font-size:.95em}
+.doc .d-md-table th,.doc .d-md-table td{border:1px solid var(--rule);padding:4px 8px;text-align:left;background:none;text-transform:none;letter-spacing:0;font-family:inherit;font-size:inherit;color:inherit;white-space:normal}
+.doc .d-md-table th{font-weight:700}
+.md-help{margin-top:8px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--sunk);font-size:13px}
+.md-help summary{cursor:pointer;padding:9px 12px;font-family:var(--font-num);font-size:11px;text-transform:uppercase;letter-spacing:.08em}
+.md-help .md-body{padding:0 12px 12px;display:grid;gap:8px}
+.md-help pre{margin:0;padding:10px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);white-space:pre-wrap;font:12px/1.5 var(--font-num);max-height:260px;overflow:auto}
+.md-help code{font-family:var(--font-num);font-size:12px}
 .doc .d-subject{font-size:13px}
 .doc .d-sign{align-self:flex-end;margin-left:auto;text-align:center;width:230px;display:flex;flex-direction:column;gap:2px}
 .doc .d-sign-line{height:46px;border-bottom:1px solid var(--ink);margin-bottom:4px}
@@ -329,15 +344,54 @@ td.r,th.r{text-align:right}
 
 @media (max-width:860px){
   .app{grid-template-columns:1fr}
-  .rail{position:sticky;top:0;margin:0;border-radius:0;border-width:0 0 1px;height:auto;flex-direction:row;align-items:center;overflow-x:auto;padding:8px 12px;z-index:20;gap:2px}
-  .brand{padding:0 8px 0 0;flex:none}.brand-name{white-space:nowrap}.brand small,.nav-sep{display:none}
-  .rail-foot{margin:0;flex-direction:row;align-items:center}
-  .rail-foot span{display:none}
-  .nav-btn{flex:none}.nav-btn .count{display:none}
+  .rail{position:sticky;top:0;margin:0;border-radius:0;border-width:0 0 1px;height:auto;max-height:100vh;max-height:100dvh;flex-direction:column;align-items:stretch;overflow-y:auto;padding:8px 12px;z-index:20;gap:2px}
+  .brand{padding:0;flex:none;width:100%}.brand-name{white-space:nowrap}.brand small,.nav-sep{display:none}
+  .burger{display:inline-flex;flex-direction:column;justify-content:center;gap:5px;margin-left:auto;width:44px;height:44px;padding:0 11px;border:1px solid var(--line-strong);border-radius:var(--r-sm);background:var(--surface);cursor:pointer}
+  .burger span{display:block;height:2px;background:var(--fg);border-radius:2px;transition:transform .2s,opacity .2s}
+  .rail.open .burger span:nth-child(1){transform:translateY(7px) rotate(45deg)}
+  .rail.open .burger span:nth-child(2){opacity:0}
+  .rail.open .burger span:nth-child(3){transform:translateY(-7px) rotate(-45deg)}
+  /* menu items stay hidden until the hamburger is tapped */
+  .rail>.nav-btn,.rail>.rail-foot{display:none}
+  .rail.open>.nav-btn{display:flex}
+  .rail.open>.rail-foot{display:flex;margin-top:8px;padding:8px 0 4px}
+  .rail.open .nav-sep{display:block}
+  .nav-btn .count{display:inline}
   main{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
   .head h1{font-size:24px}
   .search{width:100%}
   .form{grid-template-columns:1fr}
+}
+@media (max-width:640px){
+  main{padding-block:16px 40px}
+  .head{align-items:stretch}
+  .head>.toolbar,.head .toolbar{width:100%}
+  .head .toolbar>.btn,.head .toolbar>.seg{flex:1 1 auto;text-align:center}
+  .btn{padding:11px 14px}.btn.sm{padding:8px 12px}
+  .nav-btn{padding:11px 12px}
+  /* 16px inputs stop iOS zooming the page on focus */
+  .input,.seg button{font-size:16px}
+  .seg button{padding:10px 12px}
+  .kpis{grid-template-columns:1fr 1fr;gap:10px}
+  .kpi{padding:12px 14px}.kpi .value{font-size:20px}
+  .grid2{grid-template-columns:minmax(0,1fr)}
+  .list-plain li{padding:12px 14px}
+  .board{grid-auto-columns:82%;scroll-snap-type:x mandatory;margin-inline:-4px;padding-inline:4px}
+  .col{scroll-snap-align:start}
+  /* tables turn into stacked cards; JS copies each column heading into data-label */
+  .table-wrap table,.table-wrap tbody,.table-wrap tr,.table-wrap td{display:block;width:100%}
+  .table-wrap thead{display:none}
+  .table-wrap tr{padding:10px 14px;border-bottom:1px solid var(--line)}
+  .table-wrap tbody tr:last-child{border-bottom:0}
+  .table-wrap td{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:4px 0;border:0;text-align:right}
+  .table-wrap td::before{content:attr(data-label);flex:none;font-family:var(--font-num);font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);text-align:left}
+  .table-wrap td:first-child{display:block;text-align:left;font-size:15px}
+  .table-wrap td:first-child::before,.table-wrap td:not([data-label])::before,.table-wrap td[data-label=""]::before{display:none}
+  .sheet,.sheet.wide{width:100%;border-left:0}
+  .sheet-head{padding:14px 16px}.sheet-body{padding:16px}
+  .sheet-foot{padding:12px 16px;position:sticky;bottom:0;padding-bottom:max(12px,env(safe-area-inset-bottom,0px))}
+  .toast{bottom:max(20px,env(safe-area-inset-bottom,0px))}
+  .auth-box{padding:22px}
 }
 /* ---------- loading & motion ---------- */
 #progress{position:fixed;top:0;left:0;right:0;height:3px;z-index:100;pointer-events:none;opacity:0;transition:opacity .3s}

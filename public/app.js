@@ -297,6 +297,7 @@ function applyRoute(rt,{preset=null,scrollTop=false,scrollTo=null}={}){
   const viewChanged=rt.view!==S.view||rt.param!==S.param||(rt.view==="settings"&&rt.tab!==S.settingsTab);
   S.view=rt.view; S.param=rt.param; if(rt.view==="settings") S.settingsTab=rt.tab||"company";
   if(viewChanged) S.viewEnter=true;
+  const rail=$("#rail"); if(rail?.classList.contains("open")){ rail.classList.remove("open"); $('[data-act="menu"]')?.setAttribute("aria-expanded","false"); }
   if($("#main")&&S.ready) doRender();
   if(S.ready){
     if(!rt.record){ if(S.sheet) hideSheet(); }
@@ -340,7 +341,7 @@ function renderRail(){
   const c={leads:S.data.leads.filter(l=>!["Won","Lost"].includes(l.stage)).length,clients:S.data.clients.length,projects:S.data.projects.filter(p=>p.status==="Active").length,
     tasks:S.data.tasks.filter(t=>t.status!=="Done").length,quotes:S.data.quotes.length,invoices:S.data.invoices.filter(i=>["Sent","Partially paid","Overdue"].includes(invoiceStatus(i))).length};
   const parent={client:"clients",project:"projects"}[S.view]||S.view;
-  $("#rail").innerHTML=`<div class="brand">${brandMark(S.settings)}<span class="brand-name">${wordmark((S.settings.companyName||"").toUpperCase())}<small>CRM</small></span></div>`+
+  $("#rail").innerHTML=`<div class="brand">${brandMark(S.settings)}<span class="brand-name">${wordmark((S.settings.companyName||"").toUpperCase())}<small>CRM</small></span><button class="burger" data-act="menu" aria-label="Menu" aria-expanded="${$("#rail")?.classList.contains("open")?"true":"false"}"><span></span><span></span><span></span></button></div>`+
     NAV.map(n=>n[0]==="sep"?`<div class="nav-sep"></div>`:
       `<a class="nav-btn" href="${n[0]==="settings"?"/settings/company":pageUrl(n[0])}" data-go="${n[0]}" ${parent===n[0]?'aria-current="page"':""}><span>${n[1]}</span>${c[n[0]]!=null?`<span class="count">${c[n[0]]}</span>`:""}</a>`).join("")+
     `<div class="rail-foot">${isSuper()&&S.tenants.length?`<label class="label-mono" for="tenant-switch">Working in</label><select class="input" id="tenant-switch" aria-label="Switch company">${S.tenants.map(t=>`<option value="${t.id}" ${t.id===S.tenant?.id?"selected":""}>${esc(t.name)}${t.active?"":" (disabled)"}</option>`).join("")}</select>`:""}<span>${esc(S.me?.name||"")} <span class="tag">${roleLabel(S.me?.role)}</span></span><button data-act="refresh" title="Load the latest changes made by your team">↻ Refresh</button><span class="cell-sub" id="loaded-at">${S.loadedAt?"Updated "+S.loadedAt.toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}):""}</span><button data-act="logout">Sign out</button></div>`;
@@ -366,6 +367,9 @@ function doRender(){
   main.innerHTML=(views[S.view]||viewOverview)();
   main.removeAttribute("aria-busy");
   if(S.viewEnter){ S.viewEnter=false; main.classList.remove("view-enter"); void main.offsetWidth; main.classList.add("view-enter"); }
+  // label each table cell with its column heading so the phone layout can show it as a stacked card
+  main.querySelectorAll(".table-wrap table").forEach(t=>{ const heads=[...t.querySelectorAll("thead th")].map(th=>th.textContent.trim());
+    t.querySelectorAll("tbody tr").forEach(tr=>[...tr.children].forEach((td,i)=>{ if(heads[i]) td.dataset.label=heads[i]; })); });
   // a redraw (e.g. the 30-second refresh) must not wipe what the viewer is typing
   for(const [id,v] of Object.entries(S.dirty)){ const el=document.getElementById(id); if(el&&main.contains(el)) el.value=v; }
   fitLayoutPreview();
@@ -398,6 +402,8 @@ function viewOverview(){
     <div class="panel kpi"><div class="label">Spent this month</div><div class="value">${money(d.expenses.filter(e=>(e.date||"").startsWith(month)).reduce((a,e)=>a+num(e.amount),0))}</div><div class="sub">${d.expenses.filter(e=>(e.date||"").startsWith(month)).length} expense${d.expenses.filter(e=>(e.date||"").startsWith(month)).length===1?"":"s"} recorded</div></div>
     <div class="panel kpi"><div class="label">Active projects</div><div class="value">${activeProj.length}</div><div class="sub">${dueTasks.length} task${dueTasks.length===1?"":"s"} due within 7 days</div></div>
   </div><div class="grid2">`;
+  const followUps=openLeads.filter(l=>l.next_follow_up&&l.next_follow_up<=wk).sort((a,b)=>a.next_follow_up.localeCompare(b.next_follow_up));
+  h+=`<section class="panel"><h2>Lead follow-ups</h2>${followUps.length?`<ul class="list-plain">${followUps.slice(0,8).map(l=>`<li data-open="leads:${l.id}"><span><span class="cell-main">${esc(l.name)}</span><br><span class="cell-sub">${esc(l.stage||"New")} · ${esc(userName(l.owner_id))}</span></span><span class="meta" style="${l.next_follow_up<t?"color:var(--bad)":""}">${l.next_follow_up<t?"Overdue · ":""}${fmtDate(l.next_follow_up)}</span></li>`).join("")}</ul>`:`<div class="empty">No lead follow-ups due this week.</div>`}</section>`;
   h+=`<section class="panel"><h2>Tasks due soon</h2>${dueTasks.length?`<ul class="list-plain">${dueTasks.slice(0,8).map(x=>`<li data-open="tasks:${x.id}"><span><span class="cell-main">${esc(x.title)}</span><br><span class="cell-sub">${esc(projectName(x.project_id)||"No project")} · ${esc(userName(x.assignee_id))}</span></span><span class="meta" style="${x.due_date<t?"color:var(--bad)":""}">${x.due_date<t?"Overdue · ":""}${fmtDate(x.due_date)}</span></li>`).join("")}</ul>`:`<div class="empty">No open tasks due this week.</div>`}</section>`;
   h+=`<section class="panel"><h2>Overdue invoices</h2>${overdue.length?`<ul class="list-plain">${overdue.map(i=>`<li data-open="invoices:${i.id}"><span><span class="cell-main mono">${esc(i.number)}</span><br><span class="cell-sub">${esc(clientName(i.client_id))}</span></span><span class="meta"><span class="num">${money(i._t.balance)}</span><br>due ${fmtDate(i.due_date)}</span></li>`).join("")}</ul>`:`<div class="empty">No overdue invoices.</div>`}</section>`;
   const stageVals=LEAD_STAGES.filter(s=>s!=="Lost").map(s=>{const ls=d.leads.filter(l=>l.stage===s);return {s,n:ls.length,v:ls.reduce((a,l)=>a+num(l.value),0)};});
@@ -668,7 +674,7 @@ function accountsAdmin(){
   <div class="panel table-wrap" style="max-width:1200px"><table><thead><tr><th>Company</th><th class="r">Tenant ID</th><th class="r">Users</th><th class="r">Leads</th><th>Status</th><th></th></tr></thead><tbody>${S.tenants.map(t=>`<tr><td class="cell-main">${esc(t.name)}${t.id===S.tenant?.id?' <span class="tag">Current</span>':""}</td><td class="r num">${t.id}</td><td class="r num">${t.users}</td><td class="r num">${t.leads}</td><td>${t.active?'<span class="pill good">Active</span>':'<span class="pill bad">Disabled</span>'}</td><td class="r">${t.id!==S.tenant?.id?`<button class="btn sm" data-tenant-open="${t.id}">Open</button> `:""}${t.id!==S.me.homeTenantId?`<button class="btn sm" data-tenant-active="${t.id}">${t.active?"Disable":"Enable"}</button>`:""}</td></tr>`).join("")}</tbody></table></div>
   <form class="panel" id="new-tenant-form" style="padding:18px;max-width:1200px;margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end"><div class="field" style="flex:1;min-width:220px"><label for="t-name">New company name</label><input class="input" id="t-name" required></div><button class="btn primary" type="submit">Add company</button></form>
   <h3 class="sub-head">User accounts</h3>
-  <div class="panel table-wrap" style="max-width:1200px"><table><thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Role</th><th>Status</th><th class="r">Leads added</th><th></th></tr></thead><tbody>${S.allUsers.map(u=>`<tr><td class="cell-main">${esc(u.name)}${u.id===S.me.id?' <span class="tag">You</span>':""}</td><td>${esc(u.email)}</td><td>${esc(u.tenant_name)} <span class="cell-sub num">#${u.tenant_id}</span></td><td>${roleLabel(u.role)}</td><td>${u.active?'<span class="pill good">Active</span>':'<span class="pill bad">Disabled</span>'}</td><td class="r num">${u.leads_added}</td><td class="r" style="white-space:nowrap">${u.role!=="superadmin"?`<button class="btn sm" data-user-role="${u.id}">${u.role==="admin"?"Make member":"Make admin"}</button> <button class="btn sm" data-user-active="${u.id}">${u.active?"Disable":"Enable"}</button> <button class="btn sm" data-user-reset="${u.id}">Reset password</button>`:""}</td></tr>`).join("")}</tbody></table></div>
+  <div class="panel table-wrap" style="max-width:1200px"><table><thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Role</th><th>Status</th><th class="r">Leads added</th><th></th></tr></thead><tbody>${S.allUsers.map(u=>`<tr><td class="cell-main">${esc(u.name)}${u.id===S.me.id?' <span class="tag">You</span>':""}</td><td>${esc(u.email)}</td><td>${esc(u.tenant_name)} <span class="cell-sub num">#${u.tenant_id}</span></td><td>${roleLabel(u.role)}</td><td>${u.active?'<span class="pill good">Active</span>':'<span class="pill bad">Disabled</span>'}</td><td class="r num">${u.leads_added}</td><td class="r" style="white-space:nowrap">${u.role!=="superadmin"?`<button class="btn sm" data-user-role="${u.id}">${u.role==="admin"?"Make member":"Make admin"}</button> <button class="btn sm" data-user-active="${u.id}">${u.active?"Disable":"Enable"}</button> <button class="btn sm" data-user-reset="${u.id}">Reset password</button>${u.id!==S.me.id?` <button class="btn sm danger" data-user-delete="${u.id}">Delete</button>`:""}`:""}</td></tr>`).join("")}</tbody></table></div>
   <form class="panel" id="new-user-form" style="padding:18px;max-width:1200px;margin-top:12px"><h3 class="sub-head" style="margin-top:0">Create a user account</h3><div class="form">
     <div class="field"><label for="u-name">Name</label><input class="input" id="u-name" required></div>
     <div class="field"><label for="u-email">Email</label><input class="input" id="u-email" type="email" required></div>
@@ -715,7 +721,7 @@ function fieldHtml([key,label,type="text",o={}],rec){
   const lab=`<label for="${id}">${esc(label)}${o.req?' <span class="req">*</span>':""}</label>`;
   const sel=inner=>`<div class="${cls}">${lab}<select class="input" id="${id}" name="${key}" data-type="${type}">${inner}</select></div>`;
   if(type==="select") return sel(options(o.opts(),v));
-  if(type==="region") return sel(options(S.settings.regions||[],v,"— No region —"));
+  if(type==="region") return `<div class="${cls}">${lab}<input class="input" id="${id}" name="${key}" data-type="${type}" list="${id}-list" value="${esc(v)}" placeholder="Pick or type a region" autocomplete="off"><datalist id="${id}-list">${(S.settings.regions||[]).map(r=>`<option value="${esc(r)}">`).join("")}</datalist></div>`;
   if(type==="client") return sel(`<option value="">— None —</option>`+[...S.data.clients].sort((a,b)=>(a.company||a.name).localeCompare(b.company||b.name)).map(c=>`<option value="${c.id}" ${c.id===v?"selected":""}>${esc(c.company||c.name)}</option>`).join(""));
   if(type==="project") return sel(`<option value="">— None —</option>`+S.data.projects.map(p=>`<option value="${p.id}" ${p.id===v?"selected":""}>${esc(p.name)}</option>`).join(""));
   if(type==="person") return sel(`<option value="">Unassigned</option>`+S.users.filter(u=>u.active||u.id===v).map(u=>`<option value="${u.id}" ${u.id===v?"selected":""}>${esc(u.name)}${u.id===S.me.id?" (you)":""}</option>`).join(""));
@@ -801,12 +807,27 @@ function openDocEditor(col,id,preset={}){
   markSheetClean();
   return true;
 }
+const MD_PROMPT=`Write the body of a business quotation as Markdown. My quotation software adds the header (company logo and details, quotation number, date, validity, client name and address), the total, signature and footer by itself, so do NOT write any of those.
+
+About my business: [what you sell, in 1-2 lines]
+Client and their need: [client name, what they asked for]
+Scope, prices and timeline: [deliverables, price breakdown, phases or dates]
+Terms to include: [payment terms, validity, warranty, GST/taxes, anything else]
+Tone: professional, clear, plain English.
+
+Rules for the output:
+- Return only the Markdown inside one code block, with no explanation before or after.
+- Start directly with the content, not a title or letterhead. Do not write a signature, "From/To" lines, the date or a company address.
+- Use only this syntax: "## Heading" and "### Subheading", **bold**, *italic*, "- " bullets, "1. " numbered lists, "---" divider, and pipe tables with a header row (use a table for pricing or a payment schedule).
+- Do not use HTML, images, links, code blocks or nested lists.
+- If any detail is missing, ask me before writing, otherwise use [placeholders].`;
 function drawDocEditor(){
   const {col,doc:d,id,tab}=S.sheet, isQ=col==="quotes", isNew=!id;
-  const status=isQ?quoteStatus(d):invoiceStatus(d);
+  const status=isQ?quoteStatus(d):invoiceStatus(d), md=isQ&&d.doc_mode==="markdown";
   let body;
   if(tab==="preview") body=docPaper(col,d);
   else body=`${metaStrip(d)}<div class="form">
+    ${isQ?`<div class="field full"><label for="d-mode">Quotation format</label><select class="input" id="d-mode" data-d="doc_mode"><option value="">Standard — line items and totals</option><option value="markdown" ${md?"selected":""}>Custom document — write the body in Markdown</option></select><span class="hint">${md?"Your Markdown becomes the body. Header, client details, totals, signature and footer are still added automatically.":"Pick Custom document to paste a full proposal written in Markdown."}</span></div>`:""}
     <div class="field"><label for="d-number">${isQ?"Quotation":"Invoice"} number</label><input class="input mono" id="d-number" data-d="number" value="${esc(d.number)}"></div>
     <div class="field"><label for="d-client">Client <span class="req">*</span></label><select class="input" id="d-client" data-d="client_id" data-num><option value="">— Select client —</option>${S.data.clients.map(c=>`<option value="${c.id}" ${c.id===d.client_id?"selected":""}>${esc(c.company||c.name)}</option>`).join("")}</select></div>
     <div class="field"><label for="d-date">Date</label><input class="input" type="date" id="d-date" data-d="date" value="${esc(d.date)}"></div>
@@ -816,11 +837,14 @@ function drawDocEditor(){
     <div class="field"><label for="d-project">Project</label><select class="input" id="d-project" data-d="project_id" data-num><option value="">— None —</option>${S.data.projects.filter(p=>!d.client_id||!p.client_id||p.client_id===d.client_id).map(p=>`<option value="${p.id}" ${p.id===d.project_id?"selected":""}>${esc(p.name)}</option>`).join("")}</select></div>
     <div class="field"><label for="d-status">Status</label><select class="input" id="d-status" data-d="status">${(isQ?QUOTE_STATUS:INVOICE_STATUS).map(x=>`<option ${x===d.status?"selected":""}>${x}</option>`).join("")}</select><span class="hint">Shown as ${pill(status)}${isQ?"":" — paid and overdue are worked out from payments and the due date."}</span></div>
   </div>
-  <h3 class="sub-head">Line items</h3>
+  ${md?`<h3 class="sub-head">Document body (Markdown)</h3>
+  <div class="field"><textarea class="input" id="d-body" data-d="body" style="min-height:300px;font-family:var(--font-num);font-size:13px" placeholder="## Scope of work&#10;- Item one&#10;- Item two&#10;&#10;## Pricing&#10;| Item | Amount |&#10;|---|---|&#10;| Design | 50,000 |">${esc(d.body||"")}</textarea><span class="hint">Use the Preview tab to see it with your header and footer.</span></div>
+  <details class="md-help"><summary>Write it with Claude</summary><div class="md-body"><span>Copy this prompt into Claude, fill in the bracketed parts, then paste Claude's Markdown above.</span><pre id="md-prompt">${esc(MD_PROMPT)}</pre><div><button type="button" class="btn sm" data-act="copy-md-prompt">Copy prompt</button></div><span class="cell-sub">Supported: <code>## Heading</code> <code>**bold**</code> <code>*italic*</code> <code>- bullet</code> <code>1. numbered</code> <code>| table |</code> <code>---</code></span></div></details>
+  <div class="form" style="margin-top:12px"><div class="field"><label for="it-rate-0">Quoted amount (optional)</label><input class="input num" id="it-rate-0" type="number" step="any" data-it="0:rate" value="${esc(d.items[0]?.rate??0)}"><span class="hint">Shown as the total under your document. Leave 0 if the Markdown already states prices.</span></div></div>`:`  <h3 class="sub-head">Line items</h3>
   <div class="table-wrap"><table class="items"><thead><tr><th>Description</th>${savedLayout().showHsn?"<th>HSN/SAC</th>":""}<th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th><th></th></tr></thead><tbody>
   ${d.items.map((it,i)=>`<tr><td><input class="input" id="it-desc-${i}" data-it="${i}:desc" value="${esc(it.desc)}" placeholder="Item or service" aria-label="Description"></td>${savedLayout().showHsn?`<td><input class="input hsn" id="it-hsn-${i}" data-it="${i}:hsn" value="${esc(it.hsn||"")}" placeholder="e.g. 998314" aria-label="HSN/SAC code"></td>`:""}<td><input class="input qty num" id="it-qty-${i}" type="number" step="any" data-it="${i}:qty" value="${esc(it.qty)}" aria-label="Quantity"></td><td><input class="input rate num" id="it-rate-${i}" type="number" step="any" data-it="${i}:rate" value="${esc(it.rate)}" aria-label="Rate"></td><td class="r num" data-amt="${i}">${money(num(it.qty)*num(it.rate))}</td><td>${d.items.length>1?`<button type="button" class="btn ghost sm" data-del-item="${i}" aria-label="Remove line">✕</button>`:""}</td></tr>`).join("")}
   </tbody></table></div>
-  <button type="button" class="btn sm" data-add-item style="margin-top:8px">+ Add line</button>
+  <button type="button" class="btn sm" data-add-item style="margin-top:8px">+ Add line</button>`}
   <div class="totals" id="d-totals">${totalsHtml(d)}</div>
   <div class="form" style="margin-top:16px">
     <div class="field"><label for="d-discount">Discount (amount)</label><input class="input num" id="d-discount" type="number" step="any" data-d="discount" value="${esc(d.discount)}"></div>
@@ -864,7 +888,8 @@ function docModel(col,d){
     ref:d.ref||"", subject:d.title||"", notes:d.notes||"", bank:s.bank||"", currency:cur(), money, brandColor:s.brandColor||"",
     seller:{name:s.companyName||"Your company",logo:s.logo,address:s.address,email:s.email,phone:s.phone,website:s.website,gstin:s.taxId},
     buyer:{name:c.company||c.name||"—",contact:c.name,address:c.address,gstin:c.tax_id},
-    items, totals:{...totals(d),taxRate:num(d.tax_rate)} };
+    items, totals:{...totals(d),taxRate:num(d.tax_rate)},
+    ...(isQ&&d.doc_mode==="markdown"?{body:d.body||""}:{}) };
 }
 function docPaper(col,d,layout){ return DocTemplates.render(docModel(col,d),layout||savedLayout()); }
 function setPageSize(layout){
@@ -881,6 +906,7 @@ function docBody(d){
   const out={number:d.number,client_id:d.client_id||null,project_id:d.project_id||null,title:d.title||"",ref:d.ref||"",date:d.date,status:d.status,items,
     discount:num(d.discount),tax_rate:num(d.tax_rate),notes:d.notes||""};
   if(d.valid_until!==undefined) out.valid_until=d.valid_until;
+  if(d.valid_until!==undefined){ out.doc_mode=d.doc_mode||""; out.body=d.doc_mode==="markdown"?(d.body||""):""; }
   if(d.due_date!==undefined) out.due_date=d.due_date;
   if(d.payments) out.payments=d.payments;
   if(d.invoice_id) out.invoice_id=d.invoice_id;
@@ -905,7 +931,7 @@ function exportCsv(col){
 }
 
 /* ---------- events ---------- */
-const CLICKABLE="[data-go],[data-go-detail],[data-open],[data-act],[data-close],[data-mode],[data-tab],[data-stab],[data-add-item],[data-del-item],[data-del-pay],[data-user-role],[data-user-active],[data-user-reset],[data-tenant-open],[data-tenant-active],[data-tpl],[data-lkind]";
+const CLICKABLE="[data-go],[data-go-detail],[data-open],[data-act],[data-close],[data-mode],[data-tab],[data-stab],[data-add-item],[data-del-item],[data-del-pay],[data-user-role],[data-user-active],[data-user-delete],[data-user-reset],[data-tenant-open],[data-tenant-active],[data-tpl],[data-lkind]";
 // Where a clickable page/record element leads, so it can open in a new tab like a link.
 function targetUrl(el){
   if(el.dataset.go) return pageUrl(el.dataset.go);
@@ -951,12 +977,17 @@ async function handleClick(e,el){
   if(el.dataset.userActive){ const u=S.allUsers.find(x=>x.id===+el.dataset.userActive);
     if(u.active&&!await confirmBox(`Disable ${u.name}?`,"They will be signed out and cannot sign in until you enable them again. Their records stay in the CRM.","Disable")) return;
     try{ await api("PUT","/api/admin/users/"+u.id,{active:!u.active}); await loadAll(); toast(u.active?"Account disabled":"Account enabled"); }catch(err){ toast(err.message); } return; }
+  if(el.dataset.userDelete){ const u=S.allUsers.find(x=>x.id===+el.dataset.userDelete);
+    if(!await confirmBox(`Delete ${u.name}?`,"The account is removed for good and can't be undone. Leads and other records they added stay, and anything assigned to them becomes unassigned. To keep the account but block sign-in, use Disable instead.","Delete")) return;
+    try{ await api("DELETE","/api/admin/users/"+u.id); await loadAll(); toast("Account deleted"); }catch(err){ toast(err.message); } return; }
   if(el.dataset.userReset){ const u=S.allUsers.find(x=>x.id===+el.dataset.userReset); const pw=Array.from(crypto.getRandomValues(new Uint8Array(9)),b=>"abcdefghjkmnpqrstuvwxyz23456789"[b%31]).join("");
     if(!await confirmBox(`Reset ${u.name}'s password?`,`Their new password will be: ${pw}  Write it down and share it with them before confirming.`,"Reset password")) return;
     try{ await api("PUT","/api/admin/users/"+u.id,{password:pw}); toast("Password reset"); }catch(err){ toast(err.message); } return; }
   const a=el.dataset.act;
   if(a==="save-layout"){ try{ S.settings=await api("PUT","/api/settings",{docLayout:layoutDraft()}); S.layoutDraft=null; render(); toast("Layout saved. New and existing documents use it."); }catch(err){ toast(err.message); } return; }
   if(a==="reset-layout"){ S.layoutDraft={...DocTemplates.LAYOUT_DEFAULTS}; return render(); }
+  if(a==="menu"){ const r=$("#rail"); r.classList.toggle("open"); el.setAttribute("aria-expanded",r.classList.contains("open")); return; }
+  if(a==="copy-md-prompt"){ try{ await navigator.clipboard.writeText(MD_PROMPT); toast("Prompt copied"); }catch(e){ const p=$("#md-prompt"); if(p){ const r=document.createRange(); r.selectNodeContents(p); const s=getSelection(); s.removeAllRanges(); s.addRange(r); } toast("Select the prompt and copy it"); } return; }
   if(a==="refresh"){ try{ await loadAll(); toast("Up to date"); }catch(err){ toast(err.message); } return; }
   if(a==="logout"){ try{ await api("POST","/api/logout"); }catch(_){} location.reload(); return; }
   if(a==="new-lead") return openRecord("leads");
@@ -1036,6 +1067,10 @@ document.addEventListener("change",async e=>{
   if(el.id==="exp-month"){ S.expMonth=el.value; return render(); }
   if(el.id==="exp-cat"){ S.expCategory=el.value; return render(); }
   if(el.id==="tenant-switch") return switchTenant(+el.value);
+  if(el.dataset.d==="doc_mode"&&S.sheet?.doc){ const d=S.sheet.doc;
+    if(el.value==="markdown"){ d._items=d.items; d.items=[{desc:"Quoted amount",qty:1,rate:d._items.length>1||d._items[0]?.desc?totals({items:d._items}).sub:num(d._items[0]?.rate)}]; }
+    else if(d._items){ d.items=d._items; delete d._items; }
+    drawDocEditor(); }
   if(el.dataset.d==="client_id"&&S.sheet?.doc){ S.sheet.doc.client_id=Number(el.value)||null; drawDocEditor(); }
   if(el.id==="s-logo-file"&&el.files[0]){
     const f=el.files[0]; if(f.size>1_000_000){ toast("Use an image under 1 MB."); el.value=""; return; }
