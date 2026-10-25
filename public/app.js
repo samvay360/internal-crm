@@ -850,7 +850,7 @@ function drawReceiptView(){
   if(!$("#overlay .sheet")) openSheet("",true);
   const sheet=$("#overlay .sheet"); sheet.classList.add("wide");
   sheet.innerHTML=`<div class="sheet-head"><h2 id="sheet-title">Receipt <span class="mono">${esc(pay.receipt_no)}</span> <span class="cell-sub">for ${esc(d.number)}</span></h2><button type="button" class="btn ghost" data-close aria-label="Close">✕</button></div>
-  <div class="sheet-body"><div class="receipt-bar"><button type="button" class="btn sm" data-act="close-receipt">← Back to ${esc(d.number)}</button><span class="hint">Print it or save it as a PDF to send to ${esc(clientName(d.client_id)||"the client")}.</span></div>
+  <div class="sheet-body"><div class="receipt-bar"><button type="button" class="btn sm" data-act="close-receipt">← Back to ${esc(d.number)}</button><label class="check-line"><input type="checkbox" id="r-show-balance" ${pay.show_balance?"checked":""}> Show invoice total and balance due</label></div>
     <div class="receipt-view">${receiptPaper(d,pay)}</div></div>
   <div class="sheet-foot"><div class="grp"><button type="button" class="btn" data-act="copy-receipt" title="A short note to send along with the receipt">Copy message</button><button type="button" class="btn" data-act="download-doc">Download</button></div><div class="grp"><button type="button" class="btn" data-close>Close</button><button type="button" class="btn primary" data-act="print-doc">Print / PDF</button></div></div>`;
   $("#overlay [data-act='close-receipt']")?.focus({preventScroll:true});
@@ -897,6 +897,7 @@ function drawDocEditor(){
   }
   const PAY=["p-date","p-amount","p-method","p-ref","p-note"], keep={};
   if(!S.sheet.payReset) for(const id of PAY){ const el=document.getElementById(id); if(el) keep[id]=el.value; }
+  const keepShow=!S.sheet.payReset&&$("#p-show-balance")?.checked;
   S.sheet.payReset=false;
   if(!$("#overlay .sheet")) openSheet("",true);
   const sheet=$("#overlay .sheet"); sheet.classList.add("wide");
@@ -904,6 +905,7 @@ function drawDocEditor(){
   <div class="sheet-body">${body}</div>
   <div class="sheet-foot"><div class="grp">${actions.join("")}</div><div class="grp"><button type="button" class="btn" data-close>Close</button><button type="button" class="btn primary" data-act="save-doc">${isNew?"Create":"Save changes"}</button></div></div>`;
   for(const [id,v] of Object.entries(keep)){ const el=document.getElementById(id); if(el) el.value=v; }
+  if(keepShow&&$("#p-show-balance")) $("#p-show-balance").checked=true;
 }
 function totalsHtml(d){
   const t=totals(d);
@@ -913,7 +915,7 @@ function paymentsHtml(d){
   const t=totals(d);
   return `<h3 class="sub-head">Payments</h3>
   ${d.payments.length?`<div class="table-wrap"><table class="items"><thead><tr><th>Receipt</th><th>Date</th><th>Method</th><th>Reference</th><th>Recorded by</th><th class="r">Amount</th><th></th></tr></thead><tbody>${d.payments.map((p,i)=>`<tr><td class="pay-rcpt">${esc(p.receipt_no||"—")}</td><td>${fmtDate(p.date)}</td><td>${esc(p.method)}</td><td>${esc(p.ref||"")}</td><td>${esc(userName(p.by))}</td><td class="r num">${money(p.amount)}</td><td style="white-space:nowrap"><button type="button" class="btn sm" data-receipt="${i}">Receipt</button> <button type="button" class="btn ghost sm" data-del-pay="${i}" aria-label="Remove payment">✕</button></td></tr>`).join("")}</tbody></table></div>`:`<p class="hint">No payments recorded.</p>`}
-  ${t.balance>0?`<div class="form" style="margin-top:10px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))"><div class="field"><label for="p-date">Date</label><input class="input" type="date" id="p-date" value="${todayISO()}"></div><div class="field"><label for="p-amount">Amount</label><input class="input num" type="number" step="any" id="p-amount" value="${t.balance.toFixed(2)}"></div><div class="field"><label for="p-method">Method</label><select class="input" id="p-method">${PAY_METHODS.map(m=>`<option>${m}</option>`).join("")}</select></div><div class="field"><label for="p-ref">Reference</label><input class="input" id="p-ref" placeholder="UTR, cheque or transaction no."></div><div class="field" style="grid-column:1/-1"><label for="p-note">Note on receipt</label><input class="input" id="p-note" placeholder="Optional, e.g. advance payment, cheque from HDFC Bank"></div></div><button type="button" class="btn sm" data-act="add-payment" style="margin-top:8px">Record payment</button>`:""}`;
+  ${t.balance>0?`<div class="form" style="margin-top:10px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))"><div class="field"><label for="p-date">Date</label><input class="input" type="date" id="p-date" value="${todayISO()}"></div><div class="field"><label for="p-amount">Amount</label><input class="input num" type="number" step="any" id="p-amount" value="${t.balance.toFixed(2)}"></div><div class="field"><label for="p-method">Method</label><select class="input" id="p-method">${PAY_METHODS.map(m=>`<option>${m}</option>`).join("")}</select></div><div class="field"><label for="p-ref">Reference</label><input class="input" id="p-ref" placeholder="UTR, cheque or transaction no."></div><div class="field" style="grid-column:1/-1"><label for="p-note">Note on receipt</label><input class="input" id="p-note" placeholder="Optional, e.g. advance payment, cheque from HDFC Bank"></div><label class="check-line" style="grid-column:1/-1"><input type="checkbox" id="p-show-balance"> Show invoice total and balance due on the receipt</label></div><button type="button" class="btn sm" data-act="add-payment" style="margin-top:8px">Record payment</button>`:""}`;
 }
 // The company's saved document layout (Settings → Documents), or the unsaved draft while editing it.
 const savedLayout = () => ({...DocTemplates.LAYOUT_DEFAULTS,...(S.settings.docLayout||{})});
@@ -931,7 +933,7 @@ function docModel(col,d){
 function receiptModel(inv,pay){
   const base=docModel("invoices",inv), t=totals(inv), list=inv.payments||[], i=list.indexOf(pay);
   const before=list.slice(0,Math.max(i,0)).reduce((a,x)=>a+num(x.amount),0);
-  return { receiptNo:pay.receipt_no||"—", date:fmtDate(pay.date), amount:num(pay.amount), method:pay.method||"", ref:pay.ref||"", note:pay.note||"",
+  return { receiptNo:pay.receipt_no||"—", date:fmtDate(pay.date), amount:num(pay.amount), method:pay.method||"", ref:pay.ref||"", note:pay.note||"", showBalance:pay.show_balance===true,
     currency:base.currency, money, brandColor:base.brandColor, seller:base.seller, buyer:base.buyer,
     invoice:{number:inv.number||"", date:fmtDate(inv.date), total:t.total, before, balance:t.total-before-num(pay.amount)} };
 }
@@ -941,7 +943,7 @@ const currentPayment=()=>(S.sheet?.doc?.payments||[]).find(p=>p.receipt_no===S.s
 function receiptMessage(){
   const pay=currentPayment(), r=receiptModel(S.sheet.doc,pay);
   return `Dear ${r.buyer.name},\n\nWe have received ${money(r.amount)}${r.method?` by ${r.method}`:""}${r.ref?` (ref. ${r.ref})`:""} on ${r.date} against invoice ${r.invoice.number}. Receipt no. ${r.receiptNo}.\n`+
-    (r.invoice.balance<=0.004?`Invoice ${r.invoice.number} is now paid in full. Thank you!`:`Balance due on ${r.invoice.number}: ${money(r.invoice.balance)}.`)+`\n\n${r.seller.name}`;
+    (!r.showBalance?"Thank you!":r.invoice.balance<=0.004?`Invoice ${r.invoice.number} is now paid in full. Thank you!`:`Balance due on ${r.invoice.number}: ${money(r.invoice.balance)}.`)+`\n\n${r.seller.name}`;
 }
 function docPaper(col,d,layout){ return DocTemplates.render(docModel(col,d),layout||savedLayout()); }
 function setPageSize(layout,kind){
@@ -1073,7 +1075,7 @@ async function handleClick(e,el){
       if(!id) navigate(currentRoute(),{replace:true,force:true}); } return; }
   if(a==="delete-doc"){ const {col,id}=S.sheet; if(await confirmBox(`Delete ${S.sheet.doc.number}?`,"This removes it for everyone and cannot be undone.")){ if(await remove(col,id)){ closeSheetNav({force:true}); toast("Deleted"); } } return; }
   if(a==="add-payment"){ const amt=num($("#p-amount").value); if(amt<=0){ toast("Enter a payment amount."); return; }
-    const d=S.sheet.doc; d.payments=[...d.payments,{date:$("#p-date").value||todayISO(),amount:amt,method:$("#p-method").value,ref:$("#p-ref").value.trim(),note:($("#p-note")?.value||"").trim(),by:S.me.id}];
+    const d=S.sheet.doc; d.payments=[...d.payments,{date:$("#p-date").value||todayISO(),amount:amt,method:$("#p-method").value,ref:$("#p-ref").value.trim(),note:($("#p-note")?.value||"").trim(),show_balance:!!$("#p-show-balance")?.checked,by:S.me.id}];
     if(d.status==="Draft") d.status="Sent";
     const rec=await update("invoices",S.sheet.id,{...docBody(d),_activity:`Recorded payment of ${money(amt)} on ${d.number}`});
     if(rec){ S.sheet.doc=JSON.parse(JSON.stringify(rec)); S.sheet.payReset=true; drawDocEditor(); markSheetClean();
@@ -1137,6 +1139,16 @@ document.addEventListener("change",async e=>{
   if(el.id==="exp-month"){ S.expMonth=el.value; return render(); }
   if(el.id==="exp-cat"){ S.expCategory=el.value; return render(); }
   if(el.id==="tenant-switch") return switchTenant(+el.value);
+  if(el.id==="r-show-balance"&&S.sheet?.doc){
+    const pay=currentPayment(); if(!pay) return;
+    if(sheetIsDirty()){ el.checked=!el.checked; toast("Save your invoice changes first."); return; }
+    const payments=S.sheet.doc.payments.map(p=>p===pay?{...p,show_balance:el.checked}:p);
+    el.disabled=true;
+    const rec=await update("invoices",S.sheet.id,{payments,_activity:`${el.checked?"Showed":"Hid"} balance on receipt ${pay.receipt_no}`});
+    if(rec){ S.sheet.doc=JSON.parse(JSON.stringify(rec)); markSheetClean(); drawDocEditor(); toast(el.checked?"Balance due now shows on this receipt":"Balance due hidden on this receipt"); }
+    else el.checked=!el.checked;
+    el.disabled=false; return;
+  }
   if(el.dataset.d==="doc_mode"&&S.sheet?.doc){ const d=S.sheet.doc;
     if(el.value==="markdown"){ d._items=d.items; d.items=[{desc:"Quoted amount",qty:1,rate:d._items.length>1||d._items[0]?.desc?totals({items:d._items}).sub:num(d._items[0]?.rate)}]; }
     else if(d._items){ d.items=d._items; delete d._items; }

@@ -346,6 +346,8 @@ td.r,th.r{text-align:right}
 @media (max-width:520px){.rcpt .r-grid{grid-template-columns:1fr}.rcpt .r-head{text-align:left}.rcpt .r-meta{justify-content:start}}
 .receipt-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
 .receipt-view{display:flex;justify-content:center}
+.check-line{display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer}
+.check-line input{accent-color:var(--accent);width:16px;height:16px}
 .pay-rcpt{font-family:var(--font-num);font-size:12px}
 
 /* ---------- Settings → Documents: layout editor ---------- */

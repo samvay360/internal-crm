@@ -209,13 +209,14 @@ const LAYOUTS = {
 };
 
 /* ---------- payment receipt ----------
- * r: { receiptNo, date, amount, method, ref, note, seller, buyer, currency, money, brandColor,
+ * r: { receiptNo, date, amount, method, ref, note, showBalance, seller, buyer, currency, money, brandColor,
  *      invoice: { number, date, total, before, balance } } */
 function renderReceipt(r, layout) {
   const L = { ...LAYOUT_DEFAULTS, ...(layout || {}) };
   const accent = /^#[0-9a-f]{6}$/i.test(L.accent) ? L.accent : (r.brandColor || "#b8652c");
   const font = (FONTS[L.font] || FONTS.sans).css;
-  const inv = r.invoice, paidUp = inv.balance <= 0.004;
+  // the invoice total and balance are shown only when chosen for this receipt
+  const inv = r.invoice, paidUp = r.showBalance && inv.balance <= 0.004;
   const how = [r.method, r.ref ? `ref. ${r.ref}` : ""].filter(Boolean).join(", ");
   const details = [["Payment date", r.date], ["Mode", r.method || "—"], ["Reference", r.ref || "—"], ...(r.note ? [["Note", r.note]] : [])];
   return `<div class="doc rcpt paper-${L.receiptPaper === "A4" ? "a4" : "a5"}" style="--doc-accent:${accent};--doc-font:${esc(font)}">
@@ -233,8 +234,10 @@ function renderReceipt(r, layout) {
       <section><div class="d-lbl">Received from</div><div class="d-party">${esc(r.buyer.name)}</div><div class="d-muted">${buyerLines(r, L)}</div></section>
       <section><div class="d-lbl">Payment details</div><dl class="r-kv">${details.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl></section>
     </div>
-    <table class="r-sum"><thead><tr><th>Invoice</th><th class="r">Invoice total</th><th class="r">Received earlier</th><th class="r">This receipt</th><th class="r">Balance due</th></tr></thead>
-      <tbody><tr><td><b>${esc(inv.number)}</b><br><span class="d-muted">${esc(inv.date)}</span></td><td class="r d-num">${r.money(inv.total)}</td><td class="r d-num">${r.money(inv.before)}</td><td class="r d-num"><b>${r.money(r.amount)}</b></td><td class="r d-num"><b>${r.money(Math.max(inv.balance, 0))}</b></td></tr></tbody></table>
+    ${r.showBalance ? `<table class="r-sum"><thead><tr><th>Invoice</th><th class="r">Invoice total</th><th class="r">Received earlier</th><th class="r">This receipt</th><th class="r">Balance due</th></tr></thead>
+      <tbody><tr><td><b>${esc(inv.number)}</b><br><span class="d-muted">${esc(inv.date)}</span></td><td class="r d-num">${r.money(inv.total)}</td><td class="r d-num">${r.money(inv.before)}</td><td class="r d-num"><b>${r.money(r.amount)}</b></td><td class="r d-num"><b>${r.money(Math.max(inv.balance, 0))}</b></td></tr></tbody></table>`
+    : `<table class="r-sum"><thead><tr><th>Against invoice</th><th>Invoice date</th><th class="r">Amount received</th></tr></thead>
+      <tbody><tr><td><b>${esc(inv.number)}</b></td><td>${esc(inv.date)}</td><td class="r d-num"><b>${r.money(r.amount)}</b></td></tr></tbody></table>`}
     <div class="r-end">${paidUp ? `<div class="r-stamp">Paid in full</div>` : `<div></div>`}${signature(r, L)}</div>
     <div class="d-footer">This is a computer-generated receipt.${L.footer ? " " + esc(L.footer) : ""}</div>
   </div>`;
