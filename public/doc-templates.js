@@ -11,6 +11,7 @@ const LAYOUT_DEFAULTS = {
   showLogo: true, showSellerGstin: true, showBuyerGstin: true, showHsn: false,
   showWords: true, showBank: true, showNotes: true, showSignature: true,
   signatureLabel: "Authorised Signatory", footer: "Thank you for your business.",
+  receiptTitle: "Payment Receipt", receiptPaper: "A5",
 };
 const TEMPLATES = [
   { id: "classic", name: "Classic", blurb: "Company left, title right, accent rule." },
@@ -207,6 +208,38 @@ const LAYOUTS = {
   },
 };
 
+/* ---------- payment receipt ----------
+ * r: { receiptNo, date, amount, method, ref, note, seller, buyer, currency, money, brandColor,
+ *      invoice: { number, date, total, before, balance } } */
+function renderReceipt(r, layout) {
+  const L = { ...LAYOUT_DEFAULTS, ...(layout || {}) };
+  const accent = /^#[0-9a-f]{6}$/i.test(L.accent) ? L.accent : (r.brandColor || "#b8652c");
+  const font = (FONTS[L.font] || FONTS.sans).css;
+  const inv = r.invoice, paidUp = inv.balance <= 0.004;
+  const how = [r.method, r.ref ? `ref. ${r.ref}` : ""].filter(Boolean).join(", ");
+  const details = [["Payment date", r.date], ["Mode", r.method || "—"], ["Reference", r.ref || "—"], ...(r.note ? [["Note", r.note]] : [])];
+  return `<div class="doc rcpt paper-${L.receiptPaper === "A4" ? "a4" : "a5"}" style="--doc-accent:${accent};--doc-font:${esc(font)}">
+    <header class="r-top">
+      <div class="r-seller">${logo(r, L)}<div class="d-company">${esc(r.seller.name)}</div><div class="d-muted">${sellerLines(r, L)}</div></div>
+      <div class="r-head"><div class="d-title">${esc(L.receiptTitle || "Payment Receipt")}</div>
+        <dl class="r-meta"><dt>Receipt no.</dt><dd>${esc(r.receiptNo)}</dd><dt>Date</dt><dd>${esc(r.date)}</dd></dl></div>
+    </header>
+    <section class="r-amount">
+      <div><span class="d-lbl">Amount received</span><div class="r-big d-num">${r.money(r.amount)}</div></div>
+      <div class="r-words">${esc(amountInWords(r.amount, r.currency))}</div>
+    </section>
+    <p class="r-text">Received with thanks from <b>${esc(r.buyer.name)}</b> the sum of <b>${r.money(r.amount)}</b>${how ? ` by ${esc(how)}` : ""}, against invoice <b>${esc(inv.number)}</b> dated ${esc(inv.date)}.</p>
+    <div class="r-grid">
+      <section><div class="d-lbl">Received from</div><div class="d-party">${esc(r.buyer.name)}</div><div class="d-muted">${buyerLines(r, L)}</div></section>
+      <section><div class="d-lbl">Payment details</div><dl class="r-kv">${details.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl></section>
+    </div>
+    <table class="r-sum"><thead><tr><th>Invoice</th><th class="r">Invoice total</th><th class="r">Received earlier</th><th class="r">This receipt</th><th class="r">Balance due</th></tr></thead>
+      <tbody><tr><td><b>${esc(inv.number)}</b><br><span class="d-muted">${esc(inv.date)}</span></td><td class="r d-num">${r.money(inv.total)}</td><td class="r d-num">${r.money(inv.before)}</td><td class="r d-num"><b>${r.money(r.amount)}</b></td><td class="r d-num"><b>${r.money(Math.max(inv.balance, 0))}</b></td></tr></tbody></table>
+    <div class="r-end">${paidUp ? `<div class="r-stamp">Paid in full</div>` : `<div></div>`}${signature(r, L)}</div>
+    <div class="d-footer">This is a computer-generated receipt.${L.footer ? " " + esc(L.footer) : ""}</div>
+  </div>`;
+}
+
 function render(m, layout) {
   const L = { ...LAYOUT_DEFAULTS, ...(layout || {}) };
   const tpl = LAYOUTS[L.template] ? L.template : "classic";
@@ -215,5 +248,5 @@ function render(m, layout) {
   return `<div class="doc t-${tpl} paper-${L.paper === "Letter" ? "letter" : "a4"}" style="--doc-accent:${accent};--doc-font:${esc(font)}">${LAYOUTS[tpl](m, L)}</div>`;
 }
 
-window.DocTemplates = { render, amountInWords, LAYOUT_DEFAULTS, TEMPLATES, FONTS };
+window.DocTemplates = { render, renderReceipt, amountInWords, LAYOUT_DEFAULTS, TEMPLATES, FONTS };
 })();

@@ -253,17 +253,19 @@ function routeFromUrl(){
   if(view==="settings") tab=parts[1]||"company";
   let record=null; const r=new URLSearchParams(location.search).get("record");
   if(r){ const [col,id]=r.split("/"); if(COLS.includes(col)&&id) record={col,id:id==="new"?"new":Number(id)}; }
-  return {view,param,tab,record};
+  const receipt=record&&record.col==="invoices"?new URLSearchParams(location.search).get("receipt"):null;
+  return {view,param,tab,record,receipt:receipt||null};
 }
 function urlFor(rt){
   let p="/"+(PATHS[rt.view]??"");
   if((rt.view==="client"||rt.view==="project")&&rt.param) p+="/"+rt.param;
   if(rt.view==="settings") p+="/"+(rt.tab||"company");
   if(rt.record) p+="?record="+rt.record.col+"/"+rt.record.id;
+  if(rt.record&&rt.receipt) p+="&receipt="+encodeURIComponent(rt.receipt);
   return p;
 }
 const currentRoute=()=>({view:S.view,param:S.param,tab:S.view==="settings"?S.settingsTab:null,
-  record:S.sheet?{col:S.sheet.col,id:S.sheet.id||"new"}:null});
+  record:S.sheet?{col:S.sheet.col,id:S.sheet.id||"new"}:null, receipt:S.sheet?.receipt||null});
 const pageUrl=(view,param=null)=>urlFor({view,param,tab:view==="settings"?S.settingsTab:null});
 
 function saveScroll(){ try{ history.replaceState({...(history.state||{}),scroll:scrollY},""); }catch(e){} }
@@ -277,7 +279,9 @@ async function navigate(rt,{replace=false,preset=null,force=false}={}){
   saveScroll();
   const state={route:true,preset:preset||null,scroll:0,
     // a panel opened on top of a page: closing it goes Back instead of adding another entry
-    sheetPushed:rt.record?(replace?!!history.state?.sheetPushed:true):false};
+    // same record (e.g. opening its receipt) keeps the panel's flag; a newly opened panel was pushed
+    sheetPushed:rt.record?(replace||sameRecord(rt.record,currentRoute().record)?!!history.state?.sheetPushed:true):false,
+    receiptPushed:rt.receipt?(replace?!!history.state?.receiptPushed:!currentRoute().receipt||!!history.state?.receiptPushed):false};
   if(replace||url===location.pathname+location.search) history.replaceState(state,"",url); else history.pushState(state,"",url);
   remember();
   applyRoute(rt,{preset,scrollTop:!replace});
@@ -288,7 +292,8 @@ function openRecord(col,id,preset={}){ S.sheetOpener=document.activeElement; ret
 async function closeSheetNav({force=false}={}){
   if(!S.sheet) return;
   if(!force&&sheetIsDirty()&&!await confirmDiscard()) return;
-  if(history.state?.sheetPushed){ S.skipDirtyCheck=true; history.back(); }
+  const steps=(history.state?.sheetPushed?1:0)+(history.state?.receiptPushed?1:0);
+  if(history.state?.sheetPushed){ S.skipDirtyCheck=true; history.go(-steps); }
   else navigate({...currentRoute(),record:null},{replace:true,force:true});
 }
 
@@ -307,6 +312,12 @@ function applyRoute(rt,{preset=null,scrollTop=false,scrollTo=null}={}){
         history.replaceState({...history.state,sheetPushed:false},"",urlFor({...rt,record:null})); remember();
       }
     }
+  }
+  // the invoice panel can show one of its payment receipts
+  if(S.ready&&rt.record&&S.sheet?.doc&&(S.sheet.receipt||null)!==(rt.receipt||null)){
+    const exists=!rt.receipt||(S.sheet.doc.payments||[]).some(p=>p.receipt_no===rt.receipt);
+    S.sheet.receipt=exists?rt.receipt:null; drawDocEditor();
+    if(!exists){ toast("That receipt was not found on this invoice."); history.replaceState({...history.state,receiptPushed:false},"",urlFor({...rt,receipt:null})); remember(); }
   }
   document.title=`${rt.record&&S.sheet?sheetTitle()+" · ":""}${TITLES[rt.view==="client"?"clients":rt.view==="project"?"projects":rt.view]||"CRM"} · ${S.settings.companyName||"Company"} CRM`;
   if(scrollTo!=null) requestAnimationFrame(()=>scrollTo>=0&&window.scrollTo(0,scrollTo));
@@ -456,6 +467,8 @@ function viewClient(){
   h+=`<div class="panel" style="margin-bottom:16px"><dl class="detail-grid">${cells.map(([k,v])=>`<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>${c.notes?`<div style="padding:0 16px 16px;white-space:pre-wrap;color:var(--muted)">${esc(c.notes)}</div>`:""}</div><div class="grid2">`;
   h+=`<section class="panel"><h2>Projects</h2>${projects.length?`<ul class="list-plain">${projects.map(p=>`<li data-go-detail="project:${p.id}"><span class="cell-main">${esc(p.name)}</span><span class="meta">${pill(p.status||"Planning")}</span></li>`).join("")}</ul>`:`<div class="empty">No projects.</div>`}</section>`;
   h+=`<section class="panel"><h2>Quotations</h2>${quotes.length?`<ul class="list-plain">${quotes.map(x=>`<li data-open="quotes:${x.id}"><span class="mono">${esc(x.number)}</span><span class="meta"><span class="num">${money(totals(x).total)}</span> ${pill(quoteStatus(x))}</span></li>`).join("")}</ul>`:`<div class="empty">No quotations.</div>`}</section>`;
+  const receipts=invs.flatMap(inv=>(inv.payments||[]).filter(p=>p.receipt_no).map(p=>({inv,p}))).sort((a,b)=>(b.p.date||"").localeCompare(a.p.date||""));
+  h+=`<section class="panel"><h2>Payments received</h2>${receipts.length?`<ul class="list-plain">${receipts.map(({inv,p})=>`<li data-open-receipt="${inv.id}|${esc(p.receipt_no)}"><span><span class="mono cell-main">${esc(p.receipt_no)}</span><br><span class="cell-sub">${fmtDate(p.date)} · ${esc(inv.number)}${p.method?" · "+esc(p.method):""}</span></span><span class="meta num">${money(p.amount)}</span></li>`).join("")}</ul>`:`<div class="empty">No payments yet.</div>`}</section>`;
   h+=`<section class="panel"><h2>Invoices</h2>${invs.length?`<ul class="list-plain">${invs.map(x=>`<li data-open="invoices:${x.id}"><span class="mono">${esc(x.number)}</span><span class="meta"><span class="num">${money(totals(x).total)}</span> ${pill(invoiceStatus(x))}</span></li>`).join("")}</ul>`:`<div class="empty">No invoices.</div>`}</section>`;
   return h+`</div>`;
 }
@@ -576,7 +589,7 @@ function viewSettings(){
     ${f("taxId","GSTIN / Tax registration no.",s.taxId)}${f("currency","Currency code",s.currency,"text","USD, LKR, INR, EUR, GBP…")}
     ${ta("address","Address",s.address)}
     ${f("taxRate","Default tax rate (%)",s.taxRate,"number")}${f("paymentDays","Payment terms (days)",s.paymentDays,"number")}
-    ${f("quotePrefix","Quotation number prefix",s.quotePrefix)}${f("invoicePrefix","Invoice number prefix",s.invoicePrefix)}
+    ${f("quotePrefix","Quotation number prefix",s.quotePrefix)}${f("invoicePrefix","Invoice number prefix",s.invoicePrefix)}${f("receiptPrefix","Receipt number prefix",s.receiptPrefix||"RCPT-")}
     ${f("quoteDays","Quotation valid for (days)",s.quoteDays,"number")}
     ${ta("bank","Payment details shown on invoices",s.bank,"Bank name, account number, branch, SWIFT…")}
     ${ta("terms","Default terms & notes",s.terms)}</div>${saveBtn}</form>`;
@@ -616,14 +629,23 @@ function previewDoc(kind){
     items:[{desc:"Website design and development",hsn:"998314",qty:1,rate:45000},{desc:"Annual hosting and support",hsn:"998315",qty:1,rate:12000},{desc:"Content writing (per page)",hsn:"998399",qty:6,rate:1500}],
     _client:{company:"Sample Client Pvt Ltd",name:"Ravi Mehta",address:"12 Ring Road\nSurat, Gujarat 395002",tax_id:"24ABCDE1234F1Z5"}}};
 }
-function layoutPreviewHtml(layout){ const p=previewDoc(S.layoutKind||"invoice"); return docPaper(p.col,p.doc,layout); }
+// Preview for the editor: invoice, quotation, or a receipt (latest real one, otherwise a sample).
+function previewReceipt(){
+  for(const inv of S.data.invoices){ const pay=(inv.payments||[]).find(x=>x.receipt_no); if(pay) return {inv,pay,sample:false}; }
+  const inv=previewDoc("invoice").doc, pay={receipt_no:(S.settings.receiptPrefix||"RCPT-")+"0001",date:todayISO(),amount:30000,method:"Bank transfer",ref:"UTR 4201 8890 1123",note:"Advance payment"};
+  return {inv:{...inv,payments:[pay]},pay,sample:true};
+}
+function layoutPreviewHtml(layout,kind=S.layoutKind||"invoice"){
+  if(kind==="receipt"){ const r=previewReceipt(); return receiptPaper(r.inv,r.pay,layout); }
+  const p=previewDoc(kind); return docPaper(p.col,p.doc,layout);
+}
 function layoutEditor(){
   const L=layoutDraft(), T=DocTemplates.TEMPLATES, F=DocTemplates.FONTS, p=previewDoc(S.layoutKind||"invoice");
   const chk=(k,label)=>`<label><input type="checkbox" data-l="${k}" ${L[k]?"checked":""}> ${label}</label>`;
   const txt=(k,label,ph="")=>`<div class="field"><label for="L-${k}">${label}</label><input class="input" id="L-${k}" data-l="${k}" value="${esc(L[k])}" placeholder="${esc(ph)}"></div>`;
   return `<div class="layout-editor">
   <div class="panel le-controls">
-    <div><h3 class="sub-head" style="margin-top:0">Layout</h3><div class="tpl-grid" id="tpl-grid">${T.map(t=>`<button type="button" class="tpl-card" data-tpl="${t.id}" aria-pressed="${L.template===t.id}"><div class="tpl-thumb">${layoutPreviewHtml({...L,template:t.id})}</div><b>${t.name}</b><small>${t.blurb}</small></button>`).join("")}</div></div>
+    <div><h3 class="sub-head" style="margin-top:0">Layout</h3><div class="tpl-grid" id="tpl-grid">${T.map(t=>`<button type="button" class="tpl-card" data-tpl="${t.id}" aria-pressed="${L.template===t.id}"><div class="tpl-thumb">${layoutPreviewHtml({...L,template:t.id},"invoice")}</div><b>${t.name}</b><small>${t.blurb}</small></button>`).join("")}</div></div>
     <div><h3 class="sub-head" style="margin-top:0">Style</h3><div class="form">
       <div class="field"><label for="L-accent">Accent colour</label><div style="display:flex;gap:8px"><input type="color" id="L-accent-pick" data-l-pick="accent" value="${esc(L.accent||S.settings.brandColor||"#b8652c")}" aria-label="Pick accent colour" style="width:44px;height:38px;border:1px solid var(--line-strong);border-radius:8px;background:none;flex:none"><input class="input mono" id="L-accent" data-l="accent" value="${esc(L.accent)}" placeholder="Auto"></div></div>
       <div class="field"><label for="L-font">Font</label><select class="input" id="L-font" data-l="font">${Object.entries(F).map(([k,f])=>`<option value="${k}" ${L.font===k?"selected":""}>${f.label}</option>`).join("")}</select></div>
@@ -633,6 +655,8 @@ function layoutEditor(){
     <div><h3 class="sub-head" style="margin-top:0">Text</h3><div class="form">
       ${txt("invoiceTitle","Invoice title","Invoice")}${txt("quoteTitle","Quotation title","Quotation")}
       ${txt("signatureLabel","Signature label","Authorised Signatory")}${txt("footer","Footer","Thank you for your business.")}
+      ${txt("receiptTitle","Receipt title","Payment Receipt")}
+      <div class="field"><label for="L-receiptPaper">Receipt paper</label><select class="input" id="L-receiptPaper" data-l="receiptPaper">${[["A5","A5 (half A4)"],["A4","A4"]].map(([v,l])=>`<option value="${v}" ${L.receiptPaper===v?"selected":""}>${l}</option>`).join("")}</select></div>
     </div></div>
     <div><h3 class="sub-head" style="margin-top:0">Show on document</h3><div class="checks">
       ${chk("showLogo","Logo")}${chk("showSellerGstin","Our GSTIN")}${chk("showBuyerGstin","Client GSTIN")}${chk("showHsn","HSN/SAC column")}
@@ -641,23 +665,23 @@ function layoutEditor(){
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button type="button" class="btn primary" data-act="save-layout">Save layout</button><button type="button" class="btn" data-act="reset-layout">Reset to default</button><span class="unsaved" id="le-unsaved" ${layoutChanged()?"":"hidden"}>Unsaved changes</span></div>
   </div>
   <div class="le-preview">
-    <div class="le-preview-head"><div class="seg" role="group" aria-label="Preview document"><button type="button" data-lkind="invoice" aria-pressed="${(S.layoutKind||"invoice")==="invoice"}">Invoice</button><button type="button" data-lkind="quotation" aria-pressed="${S.layoutKind==="quotation"}">Quotation</button></div>
-      <span class="hint">${p.sample?"Sample data. Your latest real document will show here once you create one.":`Showing ${esc(p.doc.number)}`}</span></div>
+    <div class="le-preview-head"><div class="seg" role="group" aria-label="Preview document"><button type="button" data-lkind="invoice" aria-pressed="${(S.layoutKind||"invoice")==="invoice"}">Invoice</button><button type="button" data-lkind="quotation" aria-pressed="${S.layoutKind==="quotation"}">Quotation</button><button type="button" data-lkind="receipt" aria-pressed="${S.layoutKind==="receipt"}">Receipt</button></div>
+      <span class="hint">${S.layoutKind==="receipt"?(previewReceipt().sample?"Sample receipt. Your latest real receipt will show here once you record a payment.":`Showing ${esc(previewReceipt().pay.receipt_no)}`):p.sample?"Sample data. Your latest real document will show here once you create one.":`Showing ${esc(p.doc.number)}`}</span></div>
     <div class="le-frame"><div class="le-paper ${L.paper==="Letter"?"letter":""}" id="le-paper">${layoutPreviewHtml(L)}</div></div>
   </div></div>`;
 }
 // Fit the 794px-wide (A4 at 96 dpi) paper into the preview column and the thumbnails.
 function fitLayoutPreview(){
   const paper=$("#le-paper"); if(!paper) return;
-  const doc=paper.firstElementChild, w=paper.parentElement.clientWidth-32, scale=Math.min(1,w/794);
+  const doc=paper.firstElementChild, a5=doc.classList.contains("paper-a5"), W=a5?559:794, w=paper.parentElement.clientWidth-32, scale=Math.min(1,w/W);
   doc.style.transform=`scale(${scale})`;
-  paper.style.width=794*scale+"px"; paper.style.height=Math.max(doc.offsetHeight,paper.classList.contains("letter")?1056:1123)*scale+"px";
+  paper.style.width=W*scale+"px"; paper.style.height=Math.max(doc.offsetHeight,a5?794:paper.classList.contains("letter")?1056:1123)*scale+"px";
   document.querySelectorAll(".tpl-thumb").forEach(t=>t.style.setProperty("--thumb-scale",t.clientWidth/794));
 }
 function updateLayoutPreview(){
   const L=layoutDraft(), paper=$("#le-paper"); if(!paper) return;
   paper.innerHTML=layoutPreviewHtml(L); paper.classList.toggle("letter",L.paper==="Letter");
-  document.querySelectorAll(".tpl-card").forEach(c=>{ c.setAttribute("aria-pressed",String(c.dataset.tpl===L.template)); c.querySelector(".tpl-thumb").innerHTML=layoutPreviewHtml({...L,template:c.dataset.tpl}); });
+  document.querySelectorAll(".tpl-card").forEach(c=>{ c.setAttribute("aria-pressed",String(c.dataset.tpl===L.template)); c.querySelector(".tpl-thumb").innerHTML=layoutPreviewHtml({...L,template:c.dataset.tpl},"invoice"); });
   $("#le-unsaved").hidden=!layoutChanged();
   fitLayoutPreview();
 }
@@ -821,7 +845,19 @@ Rules for the output:
 - Use only this syntax: "## Heading" and "### Subheading", **bold**, *italic*, "- " bullets, "1. " numbered lists, "---" divider, and pipe tables with a header row (use a table for pricing or a payment schedule).
 - Do not use HTML, images, links, code blocks or nested lists.
 - If any detail is missing, ask me before writing, otherwise use [placeholders].`;
+function drawReceiptView(){
+  const d=S.sheet.doc, pay=currentPayment(); if(!pay) return false;
+  if(!$("#overlay .sheet")) openSheet("",true);
+  const sheet=$("#overlay .sheet"); sheet.classList.add("wide");
+  sheet.innerHTML=`<div class="sheet-head"><h2 id="sheet-title">Receipt <span class="mono">${esc(pay.receipt_no)}</span> <span class="cell-sub">for ${esc(d.number)}</span></h2><button type="button" class="btn ghost" data-close aria-label="Close">✕</button></div>
+  <div class="sheet-body"><div class="receipt-bar"><button type="button" class="btn sm" data-act="close-receipt">← Back to ${esc(d.number)}</button><span class="hint">Print it or save it as a PDF to send to ${esc(clientName(d.client_id)||"the client")}.</span></div>
+    <div class="receipt-view">${receiptPaper(d,pay)}</div></div>
+  <div class="sheet-foot"><div class="grp"><button type="button" class="btn" data-act="copy-receipt" title="A short note to send along with the receipt">Copy message</button><button type="button" class="btn" data-act="download-doc">Download</button></div><div class="grp"><button type="button" class="btn" data-close>Close</button><button type="button" class="btn primary" data-act="print-doc">Print / PDF</button></div></div>`;
+  $("#overlay [data-act='close-receipt']")?.focus({preventScroll:true});
+  return true;
+}
 function drawDocEditor(){
+  if(S.sheet.receipt&&drawReceiptView()) return;
   const {col,doc:d,id,tab}=S.sheet, isQ=col==="quotes", isNew=!id;
   const status=isQ?quoteStatus(d):invoiceStatus(d), md=isQ&&d.doc_mode==="markdown";
   let body;
@@ -859,7 +895,7 @@ function drawDocEditor(){
     if(isQ&&d.invoice_id&&byId("invoices",d.invoice_id)) actions.push(`<button type="button" class="btn" data-open="invoices:${d.invoice_id}">View invoice</button>`);
     actions.push(`<button type="button" class="btn" data-act="print-doc">Print / PDF</button><button type="button" class="btn" data-act="download-doc">Download</button>`);
   }
-  const PAY=["p-date","p-amount","p-method","p-ref"], keep={};
+  const PAY=["p-date","p-amount","p-method","p-ref","p-note"], keep={};
   if(!S.sheet.payReset) for(const id of PAY){ const el=document.getElementById(id); if(el) keep[id]=el.value; }
   S.sheet.payReset=false;
   if(!$("#overlay .sheet")) openSheet("",true);
@@ -876,8 +912,8 @@ function totalsHtml(d){
 function paymentsHtml(d){
   const t=totals(d);
   return `<h3 class="sub-head">Payments</h3>
-  ${d.payments.length?`<div class="table-wrap"><table class="items"><thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>Recorded by</th><th class="r">Amount</th><th></th></tr></thead><tbody>${d.payments.map((p,i)=>`<tr><td>${fmtDate(p.date)}</td><td>${esc(p.method)}</td><td>${esc(p.ref||"")}</td><td>${esc(userName(p.by))}</td><td class="r num">${money(p.amount)}</td><td><button type="button" class="btn ghost sm" data-del-pay="${i}" aria-label="Remove payment">✕</button></td></tr>`).join("")}</tbody></table></div>`:`<p class="hint">No payments recorded.</p>`}
-  ${t.balance>0?`<div class="form" style="margin-top:10px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))"><div class="field"><label for="p-date">Date</label><input class="input" type="date" id="p-date" value="${todayISO()}"></div><div class="field"><label for="p-amount">Amount</label><input class="input num" type="number" step="any" id="p-amount" value="${t.balance.toFixed(2)}"></div><div class="field"><label for="p-method">Method</label><select class="input" id="p-method">${PAY_METHODS.map(m=>`<option>${m}</option>`).join("")}</select></div><div class="field"><label for="p-ref">Reference</label><input class="input" id="p-ref" placeholder="Optional"></div></div><button type="button" class="btn sm" data-act="add-payment" style="margin-top:8px">Record payment</button>`:""}`;
+  ${d.payments.length?`<div class="table-wrap"><table class="items"><thead><tr><th>Receipt</th><th>Date</th><th>Method</th><th>Reference</th><th>Recorded by</th><th class="r">Amount</th><th></th></tr></thead><tbody>${d.payments.map((p,i)=>`<tr><td class="pay-rcpt">${esc(p.receipt_no||"—")}</td><td>${fmtDate(p.date)}</td><td>${esc(p.method)}</td><td>${esc(p.ref||"")}</td><td>${esc(userName(p.by))}</td><td class="r num">${money(p.amount)}</td><td style="white-space:nowrap"><button type="button" class="btn sm" data-receipt="${i}">Receipt</button> <button type="button" class="btn ghost sm" data-del-pay="${i}" aria-label="Remove payment">✕</button></td></tr>`).join("")}</tbody></table></div>`:`<p class="hint">No payments recorded.</p>`}
+  ${t.balance>0?`<div class="form" style="margin-top:10px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))"><div class="field"><label for="p-date">Date</label><input class="input" type="date" id="p-date" value="${todayISO()}"></div><div class="field"><label for="p-amount">Amount</label><input class="input num" type="number" step="any" id="p-amount" value="${t.balance.toFixed(2)}"></div><div class="field"><label for="p-method">Method</label><select class="input" id="p-method">${PAY_METHODS.map(m=>`<option>${m}</option>`).join("")}</select></div><div class="field"><label for="p-ref">Reference</label><input class="input" id="p-ref" placeholder="UTR, cheque or transaction no."></div><div class="field" style="grid-column:1/-1"><label for="p-note">Note on receipt</label><input class="input" id="p-note" placeholder="Optional, e.g. advance payment, cheque from HDFC Bank"></div></div><button type="button" class="btn sm" data-act="add-payment" style="margin-top:8px">Record payment</button>`:""}`;
 }
 // The company's saved document layout (Settings → Documents), or the unsaved draft while editing it.
 const savedLayout = () => ({...DocTemplates.LAYOUT_DEFAULTS,...(S.settings.docLayout||{})});
@@ -891,10 +927,26 @@ function docModel(col,d){
     items, totals:{...totals(d),taxRate:num(d.tax_rate)},
     ...(isQ&&d.doc_mode==="markdown"?{body:d.body||""}:{}) };
 }
+// Receipt for one payment on an invoice: what was paid, and where the invoice stands after it.
+function receiptModel(inv,pay){
+  const base=docModel("invoices",inv), t=totals(inv), list=inv.payments||[], i=list.indexOf(pay);
+  const before=list.slice(0,Math.max(i,0)).reduce((a,x)=>a+num(x.amount),0);
+  return { receiptNo:pay.receipt_no||"—", date:fmtDate(pay.date), amount:num(pay.amount), method:pay.method||"", ref:pay.ref||"", note:pay.note||"",
+    currency:base.currency, money, brandColor:base.brandColor, seller:base.seller, buyer:base.buyer,
+    invoice:{number:inv.number||"", date:fmtDate(inv.date), total:t.total, before, balance:t.total-before-num(pay.amount)} };
+}
+const receiptPaper=(inv,pay,layout)=>DocTemplates.renderReceipt(receiptModel(inv,pay),layout||savedLayout());
+const currentPayment=()=>(S.sheet?.doc?.payments||[]).find(p=>p.receipt_no===S.sheet.receipt);
+// a short note to paste into WhatsApp or email along with the PDF
+function receiptMessage(){
+  const pay=currentPayment(), r=receiptModel(S.sheet.doc,pay);
+  return `Dear ${r.buyer.name},\n\nWe have received ${money(r.amount)}${r.method?` by ${r.method}`:""}${r.ref?` (ref. ${r.ref})`:""} on ${r.date} against invoice ${r.invoice.number}. Receipt no. ${r.receiptNo}.\n`+
+    (r.invoice.balance<=0.004?`Invoice ${r.invoice.number} is now paid in full. Thank you!`:`Balance due on ${r.invoice.number}: ${money(r.invoice.balance)}.`)+`\n\n${r.seller.name}`;
+}
 function docPaper(col,d,layout){ return DocTemplates.render(docModel(col,d),layout||savedLayout()); }
-function setPageSize(layout){
+function setPageSize(layout,kind){
   let st=document.getElementById("page-size"); if(!st){ st=document.createElement("style"); st.id="page-size"; document.head.appendChild(st); }
-  st.textContent=`@page{size:${layout.paper==="Letter"?"letter":"A4"};margin:10mm}`;
+  st.textContent=kind==="receipt"?`@page{size:${layout.receiptPaper==="A4"?"A4":"A5"};margin:8mm}`:`@page{size:${layout.paper==="Letter"?"letter":"A4"};margin:10mm}`;
 }
 function syncDocTotals(){
   const d=S.sheet.doc;
@@ -931,9 +983,10 @@ function exportCsv(col){
 }
 
 /* ---------- events ---------- */
-const CLICKABLE="[data-go],[data-go-detail],[data-open],[data-act],[data-close],[data-mode],[data-tab],[data-stab],[data-add-item],[data-del-item],[data-del-pay],[data-user-role],[data-user-active],[data-user-delete],[data-user-reset],[data-tenant-open],[data-tenant-active],[data-tpl],[data-lkind]";
+const CLICKABLE="[data-receipt],[data-open-receipt],[data-go],[data-go-detail],[data-open],[data-act],[data-close],[data-mode],[data-tab],[data-stab],[data-add-item],[data-del-item],[data-del-pay],[data-user-role],[data-user-active],[data-user-delete],[data-user-reset],[data-tenant-open],[data-tenant-active],[data-tpl],[data-lkind]";
 // Where a clickable page/record element leads, so it can open in a new tab like a link.
 function targetUrl(el){
+  if(el.dataset.openReceipt){ const [id,no]=el.dataset.openReceipt.split("|"); return urlFor({...currentRoute(),record:{col:"invoices",id:Number(id)},receipt:no}); }
   if(el.dataset.go) return pageUrl(el.dataset.go);
   if(el.dataset.goDetail){ const [v,id]=el.dataset.goDetail.split(":"); return pageUrl(v,Number(id)); }
   if(el.dataset.open){ const [c,id]=el.dataset.open.split(":"); return urlFor({...currentRoute(),record:{col:c,id:Number(id)}}); }
@@ -953,6 +1006,14 @@ document.addEventListener("auxclick",e=>{
   const url=targetUrl(el); if(url){ e.preventDefault(); window.open(url,"_blank","noopener"); }
 });
 async function handleClick(e,el){
+  if(el.dataset.openReceipt){ const [id,no]=el.dataset.openReceipt.split("|"); S.sheetOpener=el;
+    return navigate({...currentRoute(),record:{col:"invoices",id:Number(id)},receipt:no}); }
+  if(el.dataset.receipt!=null){ let p=S.sheet.doc.payments[+el.dataset.receipt]; if(!p) return;
+    if(!p.receipt_no){ // a payment recorded before receipts existed: get it a number first
+      if(sheetIsDirty()){ toast("Save your changes first, then open the receipt."); return; }
+      const rec=await update("invoices",S.sheet.id,{payments:S.sheet.doc.payments,_activity:`Issued receipts for ${S.sheet.doc.number}`}); if(!rec) return;
+      S.sheet.doc=JSON.parse(JSON.stringify(rec)); markSheetClean(); p=rec.payments[+el.dataset.receipt]; }
+    return navigate({...currentRoute(),receipt:p.receipt_no}); }
   if(el.dataset.go) return go(el.dataset.go);
   if(el.dataset.goDetail){ const [v,id]=el.dataset.goDetail.split(":"); return go(v,Number(id)); }
   if(el.dataset.open){ const [c,id]=el.dataset.open.split(":"); return openRecord(c,Number(id)); }
@@ -1012,15 +1073,24 @@ async function handleClick(e,el){
       if(!id) navigate(currentRoute(),{replace:true,force:true}); } return; }
   if(a==="delete-doc"){ const {col,id}=S.sheet; if(await confirmBox(`Delete ${S.sheet.doc.number}?`,"This removes it for everyone and cannot be undone.")){ if(await remove(col,id)){ closeSheetNav({force:true}); toast("Deleted"); } } return; }
   if(a==="add-payment"){ const amt=num($("#p-amount").value); if(amt<=0){ toast("Enter a payment amount."); return; }
-    const d=S.sheet.doc; d.payments=[...d.payments,{date:$("#p-date").value||todayISO(),amount:amt,method:$("#p-method").value,ref:$("#p-ref").value.trim(),by:S.me.id}];
+    const d=S.sheet.doc; d.payments=[...d.payments,{date:$("#p-date").value||todayISO(),amount:amt,method:$("#p-method").value,ref:$("#p-ref").value.trim(),note:($("#p-note")?.value||"").trim(),by:S.me.id}];
     if(d.status==="Draft") d.status="Sent";
     const rec=await update("invoices",S.sheet.id,{...docBody(d),_activity:`Recorded payment of ${money(amt)} on ${d.number}`});
-    if(rec){ toast("Payment recorded"); S.sheet.doc=JSON.parse(JSON.stringify(rec)); S.sheet.payReset=true; drawDocEditor(); markSheetClean(); } return; }
+    if(rec){ S.sheet.doc=JSON.parse(JSON.stringify(rec)); S.sheet.payReset=true; drawDocEditor(); markSheetClean();
+      const no=rec.payments[rec.payments.length-1]?.receipt_no; toast(no?`Payment recorded · receipt ${no} ready to print`:"Payment recorded");
+      if(no) navigate({...currentRoute(),receipt:no}); } return; }
   if(a==="quote-to-invoice"){ const q=S.sheet.doc, s=S.settings;
     const inv={number:nextNumber("invoices",s.invoicePrefix||"INV-"),client_id:q.client_id,project_id:q.project_id,title:q.title,ref:q.ref,date:todayISO(),due_date:addDays(todayISO(),num(s.paymentDays??14)),status:"Draft",items:q.items,discount:q.discount,tax_rate:q.tax_rate,notes:q.notes,payments:[],from_quote:S.sheet.id};
     const rec=await create("invoices",docBody(inv));
     if(rec){ await update("quotes",S.sheet.id,{status:"Accepted",invoice_id:rec.id,_activity:`Converted ${q.number} to invoice ${rec.number}`}); toast(`Invoice ${rec.number} created`); navigate({...currentRoute(),record:{col:"invoices",id:rec.id}},{replace:true,force:true}); } return; }
+  if(a==="close-receipt"){ if(history.state?.receiptPushed) history.back(); else navigate({...currentRoute(),receipt:null},{replace:true}); return; }
+  if(a==="copy-receipt"){ const t=receiptMessage(); try{ await navigator.clipboard.writeText(t); toast("Message copied. Paste it into WhatsApp or email."); }catch(_){ toast(t); } return; }
+  if(a==="print-doc"&&S.sheet.receipt){ setPageSize(savedLayout(),"receipt"); document.body.classList.add("printing"); setTimeout(()=>{ window.print(); document.body.classList.remove("printing"); },50); return; }
   if(a==="print-doc"){ setPageSize(savedLayout()); S.sheet.tab="preview"; drawDocEditor(); document.body.classList.add("printing"); setTimeout(()=>{ window.print(); document.body.classList.remove("printing"); },50); return; }
+  if(a==="download-doc"&&S.sheet.receipt){ const pay=currentPayment(), L=savedLayout();
+    const css=await fetch("/app.css").then(r=>r.text()).catch(()=>"");
+    const page=`<!doctype html><html><head><meta charset="utf-8"><title>${esc(pay.receipt_no)}</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700;800&family=Source+Serif+4:wght@300;400;600;700&display=swap"><style>${css}\nbody{background:#fff;padding:24px}.doc{margin:auto;border:0}@page{size:${L.receiptPaper==="A4"?"A4":"A5"};margin:8mm}@media print{body{padding:0}}</style></head><body>${receiptPaper(S.sheet.doc,pay)}</body></html>`;
+    return saveFile(`${pay.receipt_no}.html`,page,"text/html"); }
   if(a==="download-doc"){ const {col,doc}=S.sheet;
     const css=await fetch("/app.css").then(r=>r.text()).catch(()=>"");
     const page=`<!doctype html><html><head><meta charset="utf-8"><title>${esc(doc.number)}</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700;800&family=Source+Serif+4:wght@300;400;600;700&display=swap"><style>${css}\nbody{background:#fff;padding:24px}.doc{max-width:794px;margin:auto;border:0}@page{size:${savedLayout().paper==="Letter"?"letter":"A4"};margin:10mm}@media print{body{padding:0}}</style></head><body>${docPaper(col,doc)}</body></html>`;

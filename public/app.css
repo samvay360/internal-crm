@@ -317,6 +317,37 @@ td.r,th.r{text-align:right}
 .t-gst .d-block:first-child{margin-top:0}
 .t-gst .d-footer{border:0;padding-top:0}
 
+/* Payment receipt (A5 by default: 148 × 210 mm ≈ 559 × 794 px) */
+.doc.rcpt{gap:16px;padding:32px 34px;font-size:12px}
+.doc.rcpt.paper-a5{max-width:559px}
+.rcpt .r-top{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap;padding-bottom:14px;border-bottom:2px solid var(--doc-accent)}
+.rcpt .r-seller{min-width:0;flex:1 1 220px}
+.rcpt .r-seller .d-company{font-size:15px}
+.rcpt .r-head{text-align:right}
+.rcpt .d-title{font-size:18px}
+.rcpt .r-meta{display:grid;grid-template-columns:auto auto;gap:2px 12px;margin:8px 0 0;justify-content:end}
+.rcpt .r-meta dt{color:var(--muted)}.rcpt .r-meta dd{margin:0;font-weight:700}
+.rcpt .r-amount{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;background:var(--tint);border:1px solid color-mix(in srgb,var(--doc-accent) 30%,#fff);border-radius:10px;padding:14px 16px}
+.rcpt .r-big{font-size:26px;font-weight:800;color:var(--doc-accent);letter-spacing:-.01em}
+.rcpt .r-words{font-style:italic;flex:1 1 200px;text-align:right}
+.rcpt .r-text{margin:0;font-size:13px;line-height:1.6}
+.rcpt .r-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.rcpt .r-kv{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;margin:0}
+.rcpt .r-kv dt{color:var(--muted)}.rcpt .r-kv dd{margin:0;font-weight:600;overflow-wrap:anywhere}
+.rcpt table.r-sum{width:100%;border-collapse:collapse}
+.rcpt .r-sum th{font-family:inherit;font-size:9px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:var(--muted);text-align:left;padding:7px 8px;background:#f4f1ec;border-bottom:1px solid var(--rule)}
+.rcpt .r-sum th.r,.rcpt .r-sum td.r{text-align:right}
+.rcpt .r-sum td{padding:8px;border-bottom:1px solid var(--rule);vertical-align:top}
+.rcpt .r-sum td:first-child b{white-space:nowrap}
+.rcpt .r-end{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-top:6px}
+.rcpt .r-stamp{border:2px solid #2f7a4b;color:#2f7a4b;border-radius:8px;padding:6px 12px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;transform:rotate(-4deg);font-size:13px}
+.rcpt .d-sign{width:190px}
+.rcpt .d-sign-line{height:34px}
+@media (max-width:520px){.rcpt .r-grid{grid-template-columns:1fr}.rcpt .r-head{text-align:left}.rcpt .r-meta{justify-content:start}}
+.receipt-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.receipt-view{display:flex;justify-content:center}
+.pay-rcpt{font-family:var(--font-num);font-size:12px}
+
 /* ---------- Settings → Documents: layout editor ---------- */
 .layout-editor{display:grid;grid-template-columns:minmax(300px,380px) minmax(0,1fr);gap:20px;align-items:start}
 .le-controls{padding:18px;display:flex;flex-direction:column;gap:16px}
@@ -339,6 +370,7 @@ td.r,th.r{text-align:right}
 .le-paper{position:relative;box-shadow:0 6px 24px rgba(0,0,0,.12)}
 .le-paper>.doc{position:absolute;top:0;left:0;min-height:1123px}
 .le-paper.letter>.doc{min-height:1056px}
+.le-paper>.doc.paper-a5{width:559px;max-width:none;min-height:794px}
 .unsaved{color:var(--warn);font-size:12px;font-weight:600}
 @media (max-width:1100px){.layout-editor{grid-template-columns:1fr}.le-preview{position:static}}
 
@@ -439,4 +471,21 @@ main h1:focus{outline:none}
   body.printing .sheet{position:static;box-shadow:none;border:0;width:auto!important;animation:none}
   body.printing .sheet-body{overflow:visible;padding:0}
   body.printing .doc{border:0;border-radius:0;max-width:none}
+  body.printing .receipt-bar{display:none}
+  /* A5 is small: tighten the receipt so it always fits on one sheet */
+  body.printing .doc.rcpt{padding:0;gap:10px;font-size:10.5px}
+  body.printing .rcpt .r-top{padding-bottom:10px;gap:12px;flex-wrap:nowrap}
+  body.printing .rcpt .r-seller{flex:1 1 auto}
+  body.printing .rcpt .r-head{flex:none}
+  body.printing .rcpt .d-logo{max-height:38px;margin-bottom:6px}
+  body.printing .rcpt .d-company{font-size:13px}
+  body.printing .rcpt .d-title{font-size:14px}
+  body.printing .rcpt .r-amount{padding:9px 12px}
+  body.printing .rcpt .r-big{font-size:19px}
+  body.printing .rcpt .r-text{font-size:11px;line-height:1.5}
+  body.printing .rcpt .r-sum th{padding:5px 6px;font-size:8px}
+  body.printing .rcpt .r-sum td{padding:6px}
+  body.printing .rcpt .d-sign-line{height:26px}
+  body.printing .rcpt .d-footer{padding-top:8px;font-size:9.5px}
+  body.printing .receipt-view{display:block}
 }

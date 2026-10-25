@@ -83,7 +83,7 @@ const LINKS = { client_id: "clients", project_id: "projects", owner_id: "users",
 
 const DEFAULT_SETTINGS = {
   companyName: "", email: "", phone: "", taxId: "", address: "", website: "",
-  currency: "INR", taxRate: 18, quotePrefix: "QT-", invoicePrefix: "INV-", paymentDays: 14, quoteDays: 30,
+  currency: "INR", taxRate: 18, quotePrefix: "QT-", invoicePrefix: "INV-", receiptPrefix: "RCPT-", paymentDays: 14, quoteDays: 30,
   bank: "", terms: "", logo: "", brandColor: "", docLayout: {},
   regions: ["North", "South", "East", "West", "Central"],
   leadSources: ["Website", "Referral", "Social media", "Cold outreach", "Event", "Advertising", "Other"],
@@ -157,6 +157,7 @@ const ensureReady = () => (ready ??= migrate().catch(e => { ready = null; throw 
 // Quotation/invoice layout chosen in Settings → Documents. Only known options are stored.
 const LAYOUT_SPEC = {
   template: ["classic", "band", "minimal", "gst"], font: ["sans", "serif", "plain"], paper: ["A4", "Letter"],
+  receiptPaper: ["A5", "A4"], receiptTitle: 60,
   taxDisplay: ["single", "cgst_sgst", "igst"],
   invoiceTitle: 60, quoteTitle: 60, signatureLabel: 80, footer: 300,
   showLogo: true, showSellerGstin: true, showBuyerGstin: true, showHsn: true,
@@ -517,6 +518,54 @@ async function uniqueCheck(req, entity, values, exceptId) {
   if (hit) throw httpError(409, `${values[col]} is already used. Choose another number.`);
 }
 
+/* ---------- payment receipts ----------
+ * Each payment recorded on an invoice gets a receipt number (RCPT-0001…) that is unique within the
+ * company and never reused, even if a payment is later removed. Numbers are only ever given here, under
+ * a per-company lock, so two people recording payments at the same moment can't get the same number,
+ * and a browser can't invent or change one. */
+async function withTenantLock(tenantId, fn) {
+  const c = await pool.connect();
+  try {
+    await c.query("SELECT pg_advisory_lock(3601, $1)", [tenantId]);
+    return await fn();
+  } finally {
+    await c.query("SELECT pg_advisory_unlock(3601, $1)", [tenantId]).catch(() => {});
+    c.release();
+  }
+}
+const isoDate = v => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : now().slice(0, 10));
+async function numberReceipts(req, values, before) {
+  let list; try { list = JSON.parse(values.payments || "[]"); } catch { list = []; }
+  const kept = new Map((before?.payments || []).filter(p => p.receipt_no).map(p => [p.receipt_no, p]));
+  const settings = await getSettings(req.tenantId);
+  const prefix = String(settings.receiptPrefix || "RCPT-");
+  let seq = Number(settings.receiptSeq) || 0;
+  const re = new RegExp("^" + prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(\\d+)$");
+  for (const r of await q(`SELECT p->>'receipt_no' AS no FROM invoices, jsonb_array_elements(COALESCE(payments, '[]'::jsonb)) p
+      WHERE tenant_id = $1`, [req.tenantId])) {
+    const m = re.exec(r.no || ""); if (m) seq = Math.max(seq, Number(m[1]));
+  }
+  const used = new Set(), start = seq;
+  const out = list.map(p => {
+    const amount = Number(p.amount);
+    if (!Number.isFinite(amount) || amount <= 0) throw httpError(400, "Each payment needs an amount above zero.");
+    const old = p.receipt_no && kept.get(p.receipt_no);
+    const clean = {
+      date: isoDate(p.date), amount: Math.round(amount * 100) / 100,
+      method: String(p.method || "").slice(0, 40), ref: String(p.ref || "").slice(0, 80), note: String(p.note || "").slice(0, 300),
+      by: Number.isInteger(p.by) ? p.by : req.user.id,
+    };
+    if (old && !used.has(p.receipt_no)) { used.add(p.receipt_no); return { ...clean, receipt_no: old.receipt_no, issued_at: old.issued_at, by: old.by ?? clean.by }; }
+    seq += 1;
+    return { ...clean, receipt_no: prefix + String(seq).padStart(4, "0"), issued_at: now() };
+  });
+  values.payments = JSON.stringify(out);
+  if (seq !== start) await putSetting(req.tenantId, "receiptSeq", seq);
+}
+// Invoices with payments are saved under the company's receipt lock; everything else saves directly.
+const saving = (req, entity, values, fn) =>
+  entity === "invoices" && "payments" in values ? withTenantLock(req.tenantId, fn) : fn();
+
 app.post("/api/:entity", entityGuard, async (req, res) => {
   const entity = req.params.entity;
   const values = clean(entity, req.body || {});
@@ -524,9 +573,12 @@ app.post("/api/:entity", entityGuard, async (req, res) => {
   await checkLinks(values, req.tenantId);
   await uniqueCheck(req, entity, values);
   const t = now();
-  const cols = [...Object.keys(values), "tenant_id", "created_by", "created_at", "updated_by", "updated_at"];
-  const vals = [...Object.values(values), req.tenantId, req.user.id, t, req.user.id, t];
-  const rec = rowOut(entity, await one(`INSERT INTO ${entity} (${cols.join(",")}) VALUES (${cols.map((_, i) => "$" + (i + 1)).join(",")}) RETURNING *`, vals));
+  const rec = await saving(req, entity, values, async () => {
+    if (entity === "invoices" && "payments" in values) await numberReceipts(req, values, null);
+    const cols = [...Object.keys(values), "tenant_id", "created_by", "created_at", "updated_by", "updated_at"];
+    const vals = [...Object.values(values), req.tenantId, req.user.id, t, req.user.id, t];
+    return rowOut(entity, await one(`INSERT INTO ${entity} (${cols.join(",")}) VALUES (${cols.map((_, i) => "$" + (i + 1)).join(",")}) RETURNING *`, vals));
+  });
   await logActivity(req.tenantId, entity, rec.id, "created", `Added ${req.ent.label} ${describe(rec)}`, req.user.id);
   res.status(201).json(rec);
 });
@@ -541,9 +593,16 @@ app.put("/api/:entity/:id", entityGuard, async (req, res) => {
   await uniqueCheck(req, entity, values, id);
   const cols = Object.keys(values);
   const n = cols.length;
-  const sets = [...cols.map((c, i) => `${c} = $${i + 1}`), `updated_by = $${n + 1}`, `updated_at = $${n + 2}`];
-  const rec = rowOut(entity, await one(`UPDATE ${entity} SET ${sets.join(", ")} WHERE id = $${n + 3} AND tenant_id = $${n + 4} RETURNING *`,
-    [...Object.values(values), req.user.id, now(), id, req.tenantId]));
+  const rec = await saving(req, entity, values, async () => {
+    if (entity === "invoices" && "payments" in values) {
+      // re-read inside the lock so receipts saved a moment ago by someone else are kept
+      const latest = await one("SELECT payments FROM invoices WHERE id = $1 AND tenant_id = $2", [id, req.tenantId]);
+      await numberReceipts(req, values, latest);
+    }
+    const sets = [...cols.map((c, i) => `${c} = $${i + 1}`), `updated_by = $${n + 1}`, `updated_at = $${n + 2}`];
+    return rowOut(entity, await one(`UPDATE ${entity} SET ${sets.join(", ")} WHERE id = $${n + 3} AND tenant_id = $${n + 4} RETURNING *`,
+      [...Object.values(values), req.user.id, now(), id, req.tenantId]));
+  });
   // record what changed in plain words for the history panel
   const changed = cols.filter(c => ENTITIES[entity].fields[c] !== "json" && String(before[c] ?? "") !== String(rec[c] ?? ""));
   let summary = `Updated ${describe(rec)}`;
