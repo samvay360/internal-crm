@@ -553,6 +553,7 @@ async function numberReceipts(req, values, before) {
     const clean = {
       date: isoDate(p.date), amount: Math.round(amount * 100) / 100,
       method: String(p.method || "").slice(0, 40), ref: String(p.ref || "").slice(0, 80), note: String(p.note || "").slice(0, 300),
+      show_balance: p.show_balance === true,
       by: Number.isInteger(p.by) ? p.by : req.user.id,
     };
     if (old && !used.has(p.receipt_no)) { used.add(p.receipt_no); return { ...clean, receipt_no: old.receipt_no, issued_at: old.issued_at, by: old.by ?? clean.by }; }
