@@ -118,7 +118,18 @@ CREATE TABLE IF NOT EXISTS activity (
   id SERIAL PRIMARY KEY, entity TEXT NOT NULL, entity_id INTEGER NOT NULL, action TEXT NOT NULL,
   summary TEXT, user_id INTEGER, at TEXT NOT NULL);
 ALTER TABLE activity ADD COLUMN IF NOT EXISTS tenant_id INTEGER;
-CREATE INDEX IF NOT EXISTS activity_tenant ON activity (tenant_id, entity, entity_id);`);
+CREATE INDEX IF NOT EXISTS activity_tenant ON activity (tenant_id, entity, entity_id);
+CREATE TABLE IF NOT EXISTS docs (
+  id SERIAL PRIMARY KEY, tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  title TEXT NOT NULL DEFAULT '', content JSONB, visibility TEXT NOT NULL DEFAULT 'private',
+  links JSONB NOT NULL DEFAULT '[]', tasks JSONB NOT NULL DEFAULT '[]', mentions JSONB NOT NULL DEFAULT '[]',
+  excerpt TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER, created_at TEXT NOT NULL, updated_by INTEGER, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS docs_tenant ON docs (tenant_id);
+CREATE TABLE IF NOT EXISTS notifications (
+  id SERIAL PRIMARY KEY, tenant_id INTEGER NOT NULL, user_id INTEGER NOT NULL, kind TEXT NOT NULL,
+  doc_id INTEGER, actor_id INTEGER, text TEXT, created_at TEXT NOT NULL, read_at TEXT);
+CREATE INDEX IF NOT EXISTS notifications_user ON notifications (tenant_id, user_id, read_at);`);
     for (const [name, ent] of Object.entries(ENTITIES)) {
       await run(`CREATE TABLE IF NOT EXISTS ${name} (id SERIAL PRIMARY KEY,
         created_by INTEGER, created_at TEXT NOT NULL, updated_by INTEGER, updated_at TEXT NOT NULL)`);
@@ -370,7 +381,10 @@ app.get("/api/bootstrap", async (req, res) => {
     WHERE tenant_id = $1 OR role = 'superadmin' ORDER BY name`, [req.tenantId]);
   const tenant = await one("SELECT id, name, active FROM tenants WHERE id = $1", [req.tenantId]);
   const { token, ...me } = req.user;
-  res.json({ me, tenant, settings: await getSettings(req.tenantId), users, data });
+  data.docs = (await q(`SELECT ${DOC_META} FROM docs WHERE ${canSee} ORDER BY updated_at DESC`, [req.tenantId, req.user.id])).map(docOut);
+  const unread = Number((await one(`SELECT COUNT(*) AS n FROM notifications n JOIN docs d ON d.id = n.doc_id
+    WHERE n.tenant_id = $1 AND n.user_id = $2 AND n.read_at IS NULL AND (d.visibility = 'shared' OR d.created_by = $2)`, [req.tenantId, req.user.id])).n);
+  res.json({ me, tenant, settings: await getSettings(req.tenantId), users, data, unread });
 });
 
 app.get("/api/activity/:entity/:id", async (req, res) => {
@@ -502,6 +516,160 @@ app.put("/api/admin/users/:id", requireSuper, async (req, res) => {
     await q("UPDATE users SET password_hash = $1 WHERE id = $2", [hashPassword(String(password)), id]);
     await q("DELETE FROM sessions WHERE user_id = $1", [id]);
   }
+  res.json({ ok: true });
+});
+
+/* ---------- docs ----------
+ * A doc is either locked (visibility 'private': only its creator can see it, not even admins) or shared
+ * with the whole company (anyone in the company can read and edit). Only the creator changes that.
+ * The editor's JSON is stored as-is; on every save the server extracts the tasks, mentions and a short
+ * plain-text excerpt so lists, "Assigned to me" and notifications don't need to open each doc. */
+const DOC_LINK_TYPES = ["leads", "clients", "projects", "tasks", "quotes", "invoices", "expenses"];
+const DOC_MAX_BYTES = 2_000_000;
+const DOC_META = "id, title, visibility, links, tasks, mentions, excerpt, version, created_by, created_at, updated_by, updated_at";
+const canSee = "tenant_id = $1 AND (visibility = 'shared' OR created_by = $2)";
+function analyzeDoc(content) {
+  const tasks = [], mentions = new Set(), text = [];
+  const textOf = n => (n.type === "text" ? n.text || "" : n.type === "mention" ? "@" + (n.attrs?.label || "") : (n.content || []).map(textOf).join(""));
+  const walk = n => {
+    if (!n || typeof n !== "object") return;
+    if (n.type === "mention" && Number.isInteger(Number(n.attrs?.id))) mentions.add(Number(n.attrs.id));
+    if (n.type === "taskItem") {
+      const a = n.attrs || {};
+      tasks.push({ tid: String(a.tid || "").slice(0, 64) || null, done: !!a.checked, assignee: Number.isInteger(Number(a.assignee)) && a.assignee ? Number(a.assignee) : null,
+        due: /^\d{4}-\d{2}-\d{2}$/.test(a.due || "") ? a.due : null, text: textOf((n.content || [])[0] || {}).trim().slice(0, 200) });
+    }
+    if (n.type === "text" && text.length < 400) text.push(n.text || "");
+    else if (n.type === "mention") text.push("@" + (n.attrs?.label || ""));
+    else if (n.type === "dateChip" && /^\d{4}-\d{2}-\d{2}$/.test(n.attrs?.date || "")) text.push(new Date(n.attrs.date + "T00:00:00Z").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }));
+    else if (["paragraph", "heading", "listItem", "taskItem", "blockquote", "tableCell"].includes(n.type)) text.push(" ");
+    (n.content || []).forEach(walk);
+  };
+  walk(content);
+  return { tasks, mentions: [...mentions], excerpt: text.join("").replace(/\s+/g, " ").trim().slice(0, 280) };
+}
+function cleanContent(c) {
+  if (c == null) return null;
+  if (typeof c !== "object" || c.type !== "doc") throw httpError(400, "That document content is not valid.");
+  const json = JSON.stringify(c);
+  if (json.length > DOC_MAX_BYTES) throw httpError(413, "This doc is too large. Split it into smaller docs.");
+  return json;
+}
+async function cleanLinks(links, tenantId) {
+  const out = [], seen = new Set();
+  for (const l of Array.isArray(links) ? links.slice(0, 50) : []) {
+    const type = String(l?.type || ""), id = Number(l?.id);
+    if (!DOC_LINK_TYPES.includes(type) || !Number.isInteger(id) || seen.has(type + id)) continue;
+    if (!(await one(`SELECT 1 FROM ${type} WHERE id = $1 AND tenant_id = $2`, [id, tenantId]))) throw httpError(400, "One of the linked records no longer exists.");
+    seen.add(type + id); out.push({ type, id });
+  }
+  return out;
+}
+const docOut = r => r && { ...r, links: r.links || [], tasks: r.tasks || [], mentions: r.mentions || [] };
+const findDoc = (req, id, cols = "*") => one(`SELECT ${cols} FROM docs WHERE id = $3 AND ${canSee}`, [req.tenantId, req.user.id, Number(id)]);
+// Tell people when they are newly mentioned or assigned a task in a shared doc.
+async function notifyDoc(req, before, after) {
+  if (after.visibility !== "shared") return;
+  const targets = row => {
+    const m = new Map();
+    if (!row || row.visibility !== "shared") return m;
+    for (const u of row.mentions || []) m.set(`m:${u}`, { user: u, kind: "mention", text: null });
+    for (const t of row.tasks || []) if (t.assignee && !t.done) m.set(`t:${t.tid}:${t.assignee}`, { user: t.assignee, kind: "task", text: t.text });
+    return m;
+  };
+  const prev = targets(before), cur = targets(after);
+  const fresh = [...cur].filter(([k, v]) => !prev.has(k) && v.user !== req.user.id).map(([, v]) => v);
+  if (!fresh.length) return;
+  const allowed = new Set((await q(`SELECT id FROM users WHERE active AND (tenant_id = $1 OR role = 'superadmin')`, [req.tenantId])).map(r => r.id));
+  for (const n of fresh) if (allowed.has(n.user)) {
+    await q("INSERT INTO notifications (tenant_id, user_id, kind, doc_id, actor_id, text, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+      [req.tenantId, n.user, n.kind, after.id, req.user.id, n.text, now()]);
+  }
+}
+
+app.get("/api/docs", async (req, res) => {
+  res.json((await q(`SELECT ${DOC_META} FROM docs WHERE ${canSee} ORDER BY updated_at DESC`, [req.tenantId, req.user.id])).map(docOut));
+});
+app.get("/api/docs/:id", async (req, res) => {
+  const d = await findDoc(req, req.params.id);
+  if (!d) return res.status(404).json({ error: "This doc doesn't exist, or it's locked by the person who wrote it." });
+  res.json(docOut(d));
+});
+app.post("/api/docs", async (req, res) => {
+  const b = req.body || {};
+  const content = cleanContent(b.content || { type: "doc", content: [{ type: "paragraph" }] });
+  const info = analyzeDoc(JSON.parse(content)), t = now();
+  const row = await one(`INSERT INTO docs (tenant_id, title, content, visibility, links, tasks, mentions, excerpt, created_by, created_at, updated_by, updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$9,$10) RETURNING *`,
+    [req.tenantId, String(b.title || "").trim().slice(0, 200), content, b.visibility === "shared" ? "shared" : "private",
+      JSON.stringify(await cleanLinks(b.links, req.tenantId)), JSON.stringify(info.tasks), JSON.stringify(info.mentions), info.excerpt, req.user.id, t]);
+  await notifyDoc(req, null, docOut(row));
+  res.status(201).json(docOut(row));
+});
+app.put("/api/docs/:id", async (req, res) => {
+  const before = await findDoc(req, req.params.id);
+  if (!before) return res.status(404).json({ error: "This doc doesn't exist, or it's locked by the person who wrote it." });
+  const b = req.body || {}, sets = {}, mine = before.created_by === req.user.id;
+  if ("title" in b) sets.title = String(b.title || "").trim().slice(0, 200);
+  if ("visibility" in b) {
+    const v = b.visibility === "shared" ? "shared" : "private";
+    if (v !== before.visibility && !mine) throw httpError(403, "Only the person who created this doc can lock or share it.");
+    sets.visibility = v;
+  }
+  if ("links" in b) sets.links = JSON.stringify(await cleanLinks(b.links, req.tenantId));
+  if ("content" in b) {
+    // someone else saved since this editor loaded: don't overwrite their work unless asked to
+    if (!b.force && Number(b.base_version) !== before.version) {
+      return res.status(409).json({ error: "Someone else changed this doc while you were editing.", doc: docOut(before) });
+    }
+    sets.content = cleanContent(b.content);
+    const info = analyzeDoc(b.content);
+    Object.assign(sets, { tasks: JSON.stringify(info.tasks), mentions: JSON.stringify(info.mentions), excerpt: info.excerpt });
+  }
+  const cols = Object.keys(sets);
+  if (!cols.length) return res.json(docOut(before));
+  const row = await one(`UPDATE docs SET ${cols.map((c, i) => `${c} = $${i + 1}`).join(", ")}, version = version + 1,
+      updated_by = $${cols.length + 1}, updated_at = $${cols.length + 2} WHERE id = $${cols.length + 3} AND tenant_id = $${cols.length + 4} RETURNING *`,
+    [...cols.map(c => sets[c]), req.user.id, now(), before.id, req.tenantId]);
+  await notifyDoc(req, docOut(before), docOut(row));
+  res.json(docOut(row));
+});
+// tick or untick one task from outside the editor (the "Assigned to me" list)
+app.patch("/api/docs/:id/tasks/:tid", async (req, res) => {
+  const d = await findDoc(req, req.params.id);
+  if (!d) return res.status(404).json({ error: "This doc doesn't exist, or it's locked by the person who wrote it." });
+  let found = false;
+  const walk = n => { if (!n || typeof n !== "object") return; if (n.type === "taskItem" && n.attrs?.tid === req.params.tid) { n.attrs.checked = !!req.body?.done; found = true; } (n.content || []).forEach(walk); };
+  walk(d.content);
+  if (!found) return res.status(404).json({ error: "That task is no longer in the doc." });
+  const info = analyzeDoc(d.content);
+  const row = await one(`UPDATE docs SET content = $1, tasks = $2, version = version + 1, updated_by = $3, updated_at = $4 WHERE id = $5 AND tenant_id = $6 RETURNING ${DOC_META}`,
+    [JSON.stringify(d.content), JSON.stringify(info.tasks), req.user.id, now(), d.id, req.tenantId]);
+  res.json(docOut(row));
+});
+app.delete("/api/docs/:id", async (req, res) => {
+  const d = await findDoc(req, req.params.id, "id, created_by, visibility");
+  if (!d) return res.json({ ok: true });
+  if (d.created_by !== req.user.id && !(d.visibility === "shared" && req.user.role !== "member")) {
+    return res.status(403).json({ error: "Only the person who created this doc, or an administrator, can delete it." });
+  }
+  await q("DELETE FROM docs WHERE id = $1 AND tenant_id = $2", [d.id, req.tenantId]);
+  await q("DELETE FROM notifications WHERE doc_id = $1 AND tenant_id = $2", [d.id, req.tenantId]);
+  res.json({ ok: true });
+});
+
+/* ---------- notifications (the bell) ---------- */
+app.get("/api/notifications", async (req, res) => {
+  const items = await q(`SELECT n.id, n.kind, n.doc_id, n.actor_id, n.text, n.created_at, n.read_at, d.title AS doc_title
+    FROM notifications n JOIN docs d ON d.id = n.doc_id AND d.tenant_id = n.tenant_id
+    WHERE n.tenant_id = $1 AND n.user_id = $2 AND (d.visibility = 'shared' OR d.created_by = $2)
+    ORDER BY n.id DESC LIMIT 40`, [req.tenantId, req.user.id]);
+  res.json({ items, unread: items.filter(i => !i.read_at).length });
+});
+app.post("/api/notifications/read", async (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Number.isInteger) : null;
+  await q(`UPDATE notifications SET read_at = $1 WHERE tenant_id = $2 AND user_id = $3 AND read_at IS NULL${ids ? " AND id = ANY($4)" : ""}`,
+    ids ? [now(), req.tenantId, req.user.id, ids] : [now(), req.tenantId, req.user.id]);
   res.json({ ok: true });
 });
 

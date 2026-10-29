@@ -11,13 +11,13 @@ const QUOTE_STATUS = ["Draft","Sent","Accepted","Declined"];
 const INVOICE_STATUS = ["Draft","Sent","Void"];
 const PAY_METHODS = ["Bank transfer","Cash","Card","Cheque","Online","Other"];
 const NAV = [
-  ["overview","Overview"],["leads","Leads"],["clients","Clients"],["projects","Projects"],["tasks","Tasks"],
+  ["overview","Overview"],["leads","Leads"],["clients","Clients"],["projects","Projects"],["tasks","Tasks"],["docs","Docs"],
   ["sep"],["quotes","Quotations"],["invoices","Invoices"],["expenses","Expenses"],["sep"],["settings","Settings"]
 ];
 
 /* ---------- state ---------- */
 const S = {
-  data:{leads:[],clients:[],projects:[],tasks:[],quotes:[],invoices:[],expenses:[]},
+  data:{leads:[],clients:[],projects:[],tasks:[],quotes:[],invoices:[],expenses:[],docs:[]}, unread:0, docFilter:"all",
   settings:{}, users:[], me:null, activity:[],
   view:"overview", param:null, q:{}, mode:{leads:"board",tasks:"board"},
   taskFilter:"all", leadRegion:"", expMonth:null, expCategory:"", settingsTab:"company", sheet:null,
@@ -114,7 +114,7 @@ async function remove(col,id){
 async function loadAll(){
   const b=await api("GET","/api/bootstrap");
   S.loadedAt=new Date();
-  S.me=b.me; S.tenant=b.tenant; S.settings=b.settings; S.users=b.users; S.data=b.data;
+  S.me=b.me; S.tenant=b.tenant; S.settings=b.settings; S.users=b.users; S.data=b.data; S.unread=b.unread||0;
   if(isSuper()) await loadAdmin();
   applyBrand(S.settings);
   refreshActivity();
@@ -240,9 +240,9 @@ const skeletonPage=()=>`<div class="head"><div><span class="skel" style="width:2
  * An open record panel adds ?record=<collection>/<id|new>, so Back closes it and a link can open it.
  * A route is {view, param, tab, record:{col,id}|null}. */
 const PATHS={overview:"",leads:"leads",clients:"clients",client:"clients",projects:"projects",project:"projects",tasks:"tasks",
-  quotes:"quotations",invoices:"invoices",expenses:"expenses",settings:"settings"};
-const VIEW_OF={leads:"leads",clients:"clients",projects:"projects",tasks:"tasks",quotations:"quotes",invoices:"invoices",expenses:"expenses",settings:"settings"};
-const TITLES={overview:"Overview",leads:"Leads",clients:"Clients",projects:"Projects",tasks:"Tasks",quotes:"Quotations",invoices:"Invoices",expenses:"Expenses",settings:"Settings"};
+  quotes:"quotations",invoices:"invoices",expenses:"expenses",settings:"settings",docs:"docs",doc:"docs"};
+const VIEW_OF={docs:"docs",leads:"leads",clients:"clients",projects:"projects",tasks:"tasks",quotations:"quotes",invoices:"invoices",expenses:"expenses",settings:"settings"};
+const TITLES={docs:"Docs",overview:"Overview",leads:"Leads",clients:"Clients",projects:"Projects",tasks:"Tasks",quotes:"Quotations",invoices:"Invoices",expenses:"Expenses",settings:"Settings"};
 const sameRecord=(a,b)=>(!a&&!b)||(!!a&&!!b&&a.col===b.col&&String(a.id)===String(b.id));
 
 function routeFromUrl(){
@@ -250,6 +250,7 @@ function routeFromUrl(){
   let view=VIEW_OF[parts[0]]||"overview", param=null, tab=null;
   if(view==="clients"&&parts[1]){ view="client"; param=Number(parts[1]); }
   if(view==="projects"&&parts[1]){ view="project"; param=Number(parts[1]); }
+  if(view==="docs"&&parts[1]){ view="doc"; param=Number(parts[1]); }
   if(view==="settings") tab=parts[1]||"company";
   let record=null; const r=new URLSearchParams(location.search).get("record");
   if(r){ const [col,id]=r.split("/"); if(COLS.includes(col)&&id) record={col,id:id==="new"?"new":Number(id)}; }
@@ -258,7 +259,7 @@ function routeFromUrl(){
 }
 function urlFor(rt){
   let p="/"+(PATHS[rt.view]??"");
-  if((rt.view==="client"||rt.view==="project")&&rt.param) p+="/"+rt.param;
+  if((rt.view==="client"||rt.view==="project"||rt.view==="doc")&&rt.param) p+="/"+rt.param;
   if(rt.view==="settings") p+="/"+(rt.tab||"company");
   if(rt.record) p+="?record="+rt.record.col+"/"+rt.record.id;
   if(rt.record&&rt.receipt) p+="&receipt="+encodeURIComponent(rt.receipt);
@@ -275,6 +276,7 @@ function remember(){ S.lastUrl=location.pathname+location.search; S.lastState=hi
 async function navigate(rt,{replace=false,preset=null,force=false}={}){
   const leavingRecord=!sameRecord(rt.record,currentRoute().record);
   if(!force&&leavingRecord&&sheetIsDirty()&&!await confirmDiscard()) return false;
+  if(S.view==="doc"&&!(rt.view==="doc"&&rt.param===S.param)) await flushDoc();
   const url=urlFor(rt);
   saveScroll();
   const state={route:true,preset:preset||null,scroll:0,
@@ -300,8 +302,10 @@ async function closeSheetNav({force=false}={}){
 // Show what a route describes: the page, plus the record panel if any.
 function applyRoute(rt,{preset=null,scrollTop=false,scrollTo=null}={}){
   const viewChanged=rt.view!==S.view||rt.param!==S.param||(rt.view==="settings"&&rt.tab!==S.settingsTab);
+  if(S.docPage&&!(rt.view==="doc"&&rt.param===S.docPage.id)){ flushDoc(); leaveDocPage(); }
   S.view=rt.view; S.param=rt.param; if(rt.view==="settings") S.settingsTab=rt.tab||"company";
   if(viewChanged) S.viewEnter=true;
+  if(rt.view==="doc"&&S.ready) enterDocPage(rt.param);
   const rail=$("#rail"); if(rail?.classList.contains("open")){ rail.classList.remove("open"); $('[data-act="menu"]')?.setAttribute("aria-expanded","false"); }
   if($("#main")&&S.ready) doRender();
   if(S.ready){
@@ -319,7 +323,7 @@ function applyRoute(rt,{preset=null,scrollTop=false,scrollTo=null}={}){
     S.sheet.receipt=exists?rt.receipt:null; drawDocEditor();
     if(!exists){ toast("That receipt was not found on this invoice."); history.replaceState({...history.state,receiptPushed:false},"",urlFor({...rt,receipt:null})); remember(); }
   }
-  document.title=`${rt.record&&S.sheet?sheetTitle()+" · ":""}${TITLES[rt.view==="client"?"clients":rt.view==="project"?"projects":rt.view]||"CRM"} · ${S.settings.companyName||"Company"} CRM`;
+  document.title=`${rt.record&&S.sheet?sheetTitle()+" · ":""}${(rt.view==="doc"?(S.docPage?.doc?.title||"Untitled doc"):TITLES[rt.view==="client"?"clients":rt.view==="project"?"projects":rt.view])||"CRM"} · ${S.settings.companyName||"Company"} CRM`;
   if(scrollTo!=null) requestAnimationFrame(()=>scrollTo>=0&&window.scrollTo(0,scrollTo));
   else if(scrollTop&&viewChanged) window.scrollTo(0,0);
   if(viewChanged&&!rt.record) requestAnimationFrame(()=>$("#main h1")?.focus({preventScroll:true}));
@@ -341,6 +345,7 @@ addEventListener("popstate",async e=>{
   applyRoute(rt,{preset:e.state?.preset,scrollTo:e.state?.scroll??0});
 });
 addEventListener("beforeunload",e=>{
+  if(S.docPage&&["dirty","error","saving"].includes(S.docPage.status)){ saveDoc({keepalive:true}); e.preventDefault(); e.returnValue=""; return; }
   if(sheetIsDirty()||Object.keys(S.dirty).length||(S.layoutDraft&&layoutChanged())){ e.preventDefault(); e.returnValue=""; }
 });
 if("scrollRestoration" in history) history.scrollRestoration="manual";
@@ -351,8 +356,8 @@ if(/^#[a-z]+(\/\d+)?$/.test(location.hash)){ const [v,p]=location.hash.slice(1).
 function renderRail(){
   const c={leads:S.data.leads.filter(l=>!["Won","Lost"].includes(l.stage)).length,clients:S.data.clients.length,projects:S.data.projects.filter(p=>p.status==="Active").length,
     tasks:S.data.tasks.filter(t=>t.status!=="Done").length,quotes:S.data.quotes.length,invoices:S.data.invoices.filter(i=>["Sent","Partially paid","Overdue"].includes(invoiceStatus(i))).length};
-  const parent={client:"clients",project:"projects"}[S.view]||S.view;
-  $("#rail").innerHTML=`<div class="brand">${brandMark(S.settings)}<span class="brand-name">${wordmark((S.settings.companyName||"").toUpperCase())}<small>CRM</small></span><button class="burger" data-act="menu" aria-label="Menu" aria-expanded="${$("#rail")?.classList.contains("open")?"true":"false"}"><span></span><span></span><span></span></button></div>`+
+  const parent={client:"clients",project:"projects",doc:"docs"}[S.view]||S.view;
+  $("#rail").innerHTML=`<div class="brand">${brandMark(S.settings)}<span class="brand-name">${wordmark((S.settings.companyName||"").toUpperCase())}<small>CRM</small></span><button type="button" class="bell" id="bell" data-act="bell" aria-label="Notifications"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5a5 5 0 0 0-5 5v2.7l-1.4 2.6a.8.8 0 0 0 .7 1.2h11.4a.8.8 0 0 0 .7-1.2L15 10.2V7.5a5 5 0 0 0-5-5Z"/><path d="M8 16a2 2 0 0 0 4 0"/></svg><span class="bell-count" id="bell-count" hidden></span></button><button class="burger" data-act="menu" aria-label="Menu" aria-expanded="${$("#rail")?.classList.contains("open")?"true":"false"}"><span></span><span></span><span></span></button></div>`+
     NAV.map(n=>n[0]==="sep"?`<div class="nav-sep"></div>`:
       `<a class="nav-btn" href="${n[0]==="settings"?"/settings/company":pageUrl(n[0])}" data-go="${n[0]}" ${parent===n[0]?'aria-current="page"':""}><span>${n[1]}</span>${c[n[0]]!=null?`<span class="count">${c[n[0]]}</span>`:""}</a>`).join("")+
     `<div class="rail-foot">${isSuper()&&S.tenants.length?`<label class="label-mono" for="tenant-switch">Working in</label><select class="input" id="tenant-switch" aria-label="Switch company">${S.tenants.map(t=>`<option value="${t.id}" ${t.id===S.tenant?.id?"selected":""}>${esc(t.name)}${t.active?"":" (disabled)"}</option>`).join("")}</select>`:""}<span>${esc(S.me?.name||"")} <span class="tag">${roleLabel(S.me?.role)}</span></span><button data-act="refresh" title="Load the latest changes made by your team">↻ Refresh</button><span class="cell-sub" id="loaded-at">${S.loadedAt?"Updated "+S.loadedAt.toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}):""}</span><button data-act="logout">Sign out</button></div>`;
@@ -367,14 +372,15 @@ const emptyState = (title,body,btnLabel,act) => `<div class="empty"><strong>${es
 let queued=false;
 function render(){ if(queued||!$("#main")) return; queued=true; requestAnimationFrame(()=>{ queued=false; doRender(); }); }
 function doRender(){
-  renderRail();
+  renderRail(); paintBell();
+  if(S.view==="doc"&&S.docPage?.mounted&&S.docPage.id===S.param&&$("#ed-surface .ProseMirror")){ paintDocChrome(); return; }
   const main=$("#main");
   const active=document.activeElement, activeId=main.contains(active)?active.id:null;
   let selStart=null, selEnd=null; try{ selStart=active.selectionStart; selEnd=active.selectionEnd; }catch(e){}
   // typed-in values belong to one page of one company; forget them when either changes
   const key=[S.view,S.param,S.tenant?.id].join("|");
   if(key!==S.dirtyKey){ S.dirty={}; S.dirtyKey=key; }
-  const views={overview:viewOverview,leads:viewLeads,clients:viewClients,projects:viewProjects,tasks:viewTasks,quotes:()=>viewDocs("quotes"),invoices:()=>viewDocs("invoices"),expenses:viewExpenses,settings:viewSettings,client:viewClient,project:viewProject};
+  const views={overview:viewOverview,leads:viewLeads,clients:viewClients,projects:viewProjects,tasks:viewTasks,quotes:()=>viewDocs("quotes"),invoices:()=>viewDocs("invoices"),expenses:viewExpenses,settings:viewSettings,client:viewClient,project:viewProject,docs:viewDocsList,doc:viewDocPage};
   main.innerHTML=(views[S.view]||viewOverview)();
   main.removeAttribute("aria-busy");
   if(S.viewEnter){ S.viewEnter=false; main.classList.remove("view-enter"); void main.offsetWidth; main.classList.add("view-enter"); }
@@ -416,6 +422,7 @@ function viewOverview(){
   const followUps=openLeads.filter(l=>l.next_follow_up&&l.next_follow_up<=wk).sort((a,b)=>a.next_follow_up.localeCompare(b.next_follow_up));
   h+=`<section class="panel"><h2>Lead follow-ups</h2>${followUps.length?`<ul class="list-plain">${followUps.slice(0,8).map(l=>`<li data-open="leads:${l.id}"><span><span class="cell-main">${esc(l.name)}</span><br><span class="cell-sub">${esc(l.stage||"New")} · ${esc(userName(l.owner_id))}</span></span><span class="meta" style="${l.next_follow_up<t?"color:var(--bad)":""}">${l.next_follow_up<t?"Overdue · ":""}${fmtDate(l.next_follow_up)}</span></li>`).join("")}</ul>`:`<div class="empty">No lead follow-ups due this week.</div>`}</section>`;
   h+=`<section class="panel"><h2>Tasks due soon</h2>${dueTasks.length?`<ul class="list-plain">${dueTasks.slice(0,8).map(x=>`<li data-open="tasks:${x.id}"><span><span class="cell-main">${esc(x.title)}</span><br><span class="cell-sub">${esc(projectName(x.project_id)||"No project")} · ${esc(userName(x.assignee_id))}</span></span><span class="meta" style="${x.due_date<t?"color:var(--bad)":""}">${x.due_date<t?"Overdue · ":""}${fmtDate(x.due_date)}</span></li>`).join("")}</ul>`:`<div class="empty">No open tasks due this week.</div>`}</section>`;
+  h+=myTasksPanel();
   h+=`<section class="panel"><h2>Overdue invoices</h2>${overdue.length?`<ul class="list-plain">${overdue.map(i=>`<li data-open="invoices:${i.id}"><span><span class="cell-main mono">${esc(i.number)}</span><br><span class="cell-sub">${esc(clientName(i.client_id))}</span></span><span class="meta"><span class="num">${money(i._t.balance)}</span><br>due ${fmtDate(i.due_date)}</span></li>`).join("")}</ul>`:`<div class="empty">No overdue invoices.</div>`}</section>`;
   const stageVals=LEAD_STAGES.filter(s=>s!=="Lost").map(s=>{const ls=d.leads.filter(l=>l.stage===s);return {s,n:ls.length,v:ls.reduce((a,l)=>a+num(l.value),0)};});
   const maxV=Math.max(1,...stageVals.map(x=>x.v));
@@ -468,6 +475,7 @@ function viewClient(){
   h+=`<section class="panel"><h2>Projects</h2>${projects.length?`<ul class="list-plain">${projects.map(p=>`<li data-go-detail="project:${p.id}"><span class="cell-main">${esc(p.name)}</span><span class="meta">${pill(p.status||"Planning")}</span></li>`).join("")}</ul>`:`<div class="empty">No projects.</div>`}</section>`;
   h+=`<section class="panel"><h2>Quotations</h2>${quotes.length?`<ul class="list-plain">${quotes.map(x=>`<li data-open="quotes:${x.id}"><span class="mono">${esc(x.number)}</span><span class="meta"><span class="num">${money(totals(x).total)}</span> ${pill(quoteStatus(x))}</span></li>`).join("")}</ul>`:`<div class="empty">No quotations.</div>`}</section>`;
   const receipts=invs.flatMap(inv=>(inv.payments||[]).filter(p=>p.receipt_no).map(p=>({inv,p}))).sort((a,b)=>(b.p.date||"").localeCompare(a.p.date||""));
+  h+=`<section class="panel linked-panel">${linkedDocsHtml("clients",c.id)}</section>`;
   h+=`<section class="panel"><h2>Payments received</h2>${receipts.length?`<ul class="list-plain">${receipts.map(({inv,p})=>`<li data-open-receipt="${inv.id}|${esc(p.receipt_no)}"><span><span class="mono cell-main">${esc(p.receipt_no)}</span><br><span class="cell-sub">${fmtDate(p.date)} · ${esc(inv.number)}${p.method?" · "+esc(p.method):""}</span></span><span class="meta num">${money(p.amount)}</span></li>`).join("")}</ul>`:`<div class="empty">No payments yet.</div>`}</section>`;
   h+=`<section class="panel"><h2>Invoices</h2>${invs.length?`<ul class="list-plain">${invs.map(x=>`<li data-open="invoices:${x.id}"><span class="mono">${esc(x.number)}</span><span class="meta"><span class="num">${money(totals(x).total)}</span> ${pill(invoiceStatus(x))}</span></li>`).join("")}</ul>`:`<div class="empty">No invoices.</div>`}</section>`;
   return h+`</div>`;
@@ -493,6 +501,7 @@ function viewProject(){
   let h=head(p.name,`<a class="btn ghost sm" href="/projects" data-go="projects">← All projects</a>`,`<button class="btn" data-open="projects:${p.id}">Edit</button><button class="btn" data-act="new-invoices" data-client="${p.client_id||""}" data-project="${p.id}">Invoice this project</button><button class="btn" data-act="new-expense">Add expense</button><button class="btn primary" data-act="new-task" data-project="${p.id}">Add task</button>`);
   const cells=[["Client",p.client_id?`<a href="/clients/${p.client_id}" data-go-detail="client:${p.client_id}">${esc(clientName(p.client_id))}</a>`:"Internal"],["Status",pill(p.status||"Planning")],["Project lead",esc(p.owner_id?userName(p.owner_id):"—")],["Start",fmtDate(p.start_date)],["Due",fmtDate(p.due_date)],["Budget",`<span class="num">${p.budget?money(p.budget):"—"}</span>`],["Expenses",`<span class="num" style="${p.budget&&spent>p.budget?"color:var(--bad)":""}">${money(spent)}</span>${p.budget?` <span class="cell-sub">of ${money(p.budget)} budget</span>`:""}`],["Invoiced",`<span class="num">${money(billed)}</span>`],["Progress",`${pr.pct}% <span class="cell-sub">(${pr.done} of ${pr.n} tasks)</span>`]];
   h+=`<div class="panel" style="margin-bottom:16px"><dl class="detail-grid">${cells.map(([k,v])=>`<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>${p.description?`<div style="padding:0 16px 16px;white-space:pre-wrap;color:var(--muted)">${esc(p.description)}</div>`:""}</div>`;
+  h+=`<section class="panel linked-panel" style="margin-bottom:16px">${linkedDocsHtml("projects",p.id)}</section>`;
   return h+(tasks.length?taskBoard(tasks):`<div class="panel">${emptyState("No tasks in this project","Break the work into tasks and assign them to people on your team.","Add a task","new-task")}</div>`);
 }
 
@@ -801,7 +810,7 @@ function showRecord(col,id,preset={}){
   let extra="";
   if(col==="leads"&&id) extra+=`<button type="button" class="btn" data-act="convert-lead">${rec.client_id&&byId("clients",rec.client_id)?"View client":"Convert to client"}</button>`;
   openSheet(`<form id="rec-form" style="display:contents" novalidate><div class="sheet-head"><h2 id="sheet-title">${id?esc(rec.name||rec.title||rec.description):"New "+F.title}</h2><button type="button" class="btn ghost" data-close aria-label="Close">✕</button></div>
-  <div class="sheet-body">${metaStrip(rec)}<div class="form">${F.fields.map(f=>fieldHtml(f,rec)).join("")}</div>${id?`<h3 class="sub-head">History</h3><div id="history" aria-busy="true"><div class="skel-lines"><i></i><i></i><i></i></div></div>`:""}</div>
+  <div class="sheet-body">${metaStrip(rec)}<div class="form">${F.fields.map(f=>fieldHtml(f,rec)).join("")}</div>${id?linkedDocsHtml(col,id):""}${id?`<h3 class="sub-head">History</h3><div id="history" aria-busy="true"><div class="skel-lines"><i></i><i></i><i></i></div></div>`:""}</div>
   <div class="sheet-foot"><div class="grp">${canDelete?`<button type="button" class="btn danger" data-act="delete-rec">Delete</button>`:""}${extra}</div><div class="grp"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">${id?"Save changes":"Create "+F.title}</button></div></div></form>`);
   markSheetClean();
   if(id) loadHistory(col,id);
@@ -887,7 +896,7 @@ function drawDocEditor(){
     <div class="field"><label for="d-tax">Tax rate (%)</label><input class="input num" id="d-tax" type="number" step="any" data-d="tax_rate" value="${esc(d.tax_rate)}"></div>
     <div class="field full"><label for="d-notes">Notes & terms</label><textarea class="input" id="d-notes" data-d="notes">${esc(d.notes||"")}</textarea></div>
   </div>
-  ${!isQ&&!isNew?paymentsHtml(d):""}`;
+  ${!isQ&&!isNew?paymentsHtml(d):""}${isNew?"":linkedDocsHtml(col,id)}`;
   const actions=[];
   if(!isNew){
     if(isAdmin()||d.created_by===S.me.id) actions.push(`<button type="button" class="btn danger" data-act="delete-doc">Delete</button>`);
@@ -985,7 +994,7 @@ function exportCsv(col){
 }
 
 /* ---------- events ---------- */
-const CLICKABLE="[data-receipt],[data-open-receipt],[data-go],[data-go-detail],[data-open],[data-act],[data-close],[data-mode],[data-tab],[data-stab],[data-add-item],[data-del-item],[data-del-pay],[data-user-role],[data-user-active],[data-user-delete],[data-user-reset],[data-tenant-open],[data-tenant-active],[data-tpl],[data-lkind]";
+const CLICKABLE="[data-doc-task],[data-notif],[data-link-remove],[data-receipt],[data-open-receipt],[data-go],[data-go-detail],[data-open],[data-act],[data-close],[data-mode],[data-tab],[data-stab],[data-add-item],[data-del-item],[data-del-pay],[data-user-role],[data-user-active],[data-user-delete],[data-user-reset],[data-tenant-open],[data-tenant-active],[data-tpl],[data-lkind]";
 // Where a clickable page/record element leads, so it can open in a new tab like a link.
 function targetUrl(el){
   if(el.dataset.openReceipt){ const [id,no]=el.dataset.openReceipt.split("|"); return urlFor({...currentRoute(),record:{col:"invoices",id:Number(id)},receipt:no}); }
@@ -1008,6 +1017,13 @@ document.addEventListener("auxclick",e=>{
   const url=targetUrl(el); if(url){ e.preventDefault(); window.open(url,"_blank","noopener"); }
 });
 async function handleClick(e,el){
+  if(el.dataset.notif){ const [nid,did]=el.dataset.notif.split("|").map(Number); $("#notif-pop")?.remove();
+    api("POST","/api/notifications/read",{ids:[nid]}).then(refreshUnread).catch(()=>{}); return navigate({view:"doc",param:did}); }
+  if(el.dataset.linkRemove!=null){ const P=S.docPage; if(!P) return; const links=(P.doc.links||[]).filter((_,i)=>i!==+el.dataset.linkRemove); return saveDocField({links}); }
+  if(el.dataset.docTask){ const [did,tid]=el.dataset.docTask.split("|"); const d=byId("docs",did), t=d?.tasks.find(x=>x.tid===tid); if(!t) return;
+    t.done=true; el.closest("li")?.classList.add("done-row");
+    try{ const row=await api("PATCH",`/api/docs/${did}/tasks/${encodeURIComponent(tid)}`,{done:true}); upsertDocMeta(row); toast("Task done"); }catch(err){ t.done=false; toast(err.message); }
+    return render(); }
   if(el.dataset.openReceipt){ const [id,no]=el.dataset.openReceipt.split("|"); S.sheetOpener=el;
     return navigate({...currentRoute(),record:{col:"invoices",id:Number(id)},receipt:no}); }
   if(el.dataset.receipt!=null){ let p=S.sheet.doc.payments[+el.dataset.receipt]; if(!p) return;
@@ -1051,6 +1067,21 @@ async function handleClick(e,el){
   if(a==="reset-layout"){ S.layoutDraft={...DocTemplates.LAYOUT_DEFAULTS}; return render(); }
   if(a==="menu"){ const r=$("#rail"); r.classList.toggle("open"); el.setAttribute("aria-expanded",r.classList.contains("open")); return; }
   if(a==="copy-md-prompt"){ try{ await navigator.clipboard.writeText(MD_PROMPT); toast("Prompt copied"); }catch(e){ const p=$("#md-prompt"); if(p){ const r=document.createRange(); r.selectNodeContents(p); const s=getSelection(); s.removeAllRanges(); s.addRange(r); } toast("Select the prompt and copy it"); } return; }
+  if(a==="new-doc"){ const [type,id]=(el.dataset.link||"").split(":");
+    if(S.sheet&&sheetIsDirty()&&!await confirmDiscard()) return;
+    return createDoc(type&&id?[{type,id:Number(id)}]:[]); }
+  if(a==="bell") return openBell(el);
+  if(a==="notif-all"){ await api("POST","/api/notifications/read",{}); $("#notif-pop")?.remove(); return refreshUnread(); }
+  if(a==="doc-vis"){ const P=S.docPage, v=el.dataset.v; if(!P||P.doc.visibility===v) return;
+    if(v==="private"&&!await confirmBox("Lock this doc to yourself?","Everyone else in the company will lose access straight away, including anyone tagged or assigned in it.","Lock it")) return;
+    const row=await saveDocField({visibility:v}); if(row) toast(v==="shared"?"Shared with everyone in the company":"Locked: only you can see it now"); return; }
+  if(a==="doc-link-add") return pickLink(el);
+  if(a==="doc-delete"){ const P=S.docPage; if(!P) return;
+    if(!await confirmBox(`Delete “${P.doc.title||"Untitled"}”?`,P.doc.visibility==="shared"?"This removes it for everyone in the company and cannot be undone.":"This cannot be undone.")) return;
+    try{ await api("DELETE","/api/docs/"+P.id); S.data.docs=S.data.docs.filter(d=>d.id!==P.id); P.status="saved"; leaveDocPage(); toast("Doc deleted"); return navigate({view:"docs"},{replace:true,force:true}); }catch(err){ return toast(err.message); } }
+  if(a==="doc-print"){ await flushDoc(); document.body.classList.add("printing-doc"); setTimeout(()=>{ window.print(); document.body.classList.remove("printing-doc"); },50); return; }
+  if(a==="doc-theirs"){ const P=S.docPage; P.editor.commands.setContent(P.theirs.content,{emitUpdate:false}); P.doc={...P.doc,...P.theirs}; P.version=P.theirs.version; $("#doc-title").value=P.theirs.title||""; P.status="saved"; $("#doc-conflict").innerHTML=""; paintDocChrome(); return toast("Loaded the latest version"); }
+  if(a==="doc-mine"){ const P=S.docPage; $("#doc-conflict").innerHTML=""; P.status="dirty"; await saveDoc({force:true}); return toast("Your version is saved"); }
   if(a==="refresh"){ try{ await loadAll(); toast("Up to date"); }catch(err){ toast(err.message); } return; }
   if(a==="logout"){ try{ await api("POST","/api/logout"); }catch(_){} location.reload(); return; }
   if(a==="new-lead") return openRecord("leads");
@@ -1110,7 +1141,7 @@ function busyWhile(btn,p){
 
 function trackDirty(el){
   if(el.dataset.l||el.dataset.lPick) return; // layout editor keeps its own draft
-  if(el.id&&el.type!=="file"&&el.dataset.search==null&&!["tenant-switch","lead-region","task-filter","exp-month","exp-cat"].includes(el.id)&&$("#main")?.contains(el)) S.dirty[el.id]=el.value;
+  if(el.id&&el.type!=="file"&&el.dataset.search==null&&!["tenant-switch","lead-region","task-filter","exp-month","exp-cat","doc-filter","doc-title","ed-block"].includes(el.id)&&$("#main")?.contains(el)) S.dirty[el.id]=el.value;
 }
 function clearDirty(form){ for(const el of form.elements) delete S.dirty[el.id]; }
 function layoutInput(el){
@@ -1125,6 +1156,8 @@ document.addEventListener("input",e=>{
   const el=e.target;
   if(el.dataset.l||el.dataset.lPick) return layoutInput(el);
   trackDirty(el);
+  if(el.id==="doc-title"&&S.docPage){ const P=S.docPage; fitTitle(); clearTimeout(P.titleT); P.status="dirty"; paintDocChrome();
+    P.titleT=setTimeout(async()=>{ const row=await saveDocField({title:el.value}); if(row){ P.status=P.saving?"saving":"saved"; paintDocChrome(); document.title=`${row.title||"Untitled doc"} · ${S.settings.companyName||"Company"} CRM`; } },600); return; }
   if(el.dataset.search!=null){ S.q[el.dataset.search]=el.value; return render(); }
   if(el.dataset.d&&S.sheet?.doc){ S.sheet.doc[el.dataset.d]=el.hasAttribute("data-num")?(Number(el.value)||null):el.value; if(["discount","tax_rate"].includes(el.dataset.d)) syncDocTotals(); return; }
   if(el.dataset.it&&S.sheet?.doc){ const [i,k]=el.dataset.it.split(":"); S.sheet.doc.items[+i][k]=el.value; return syncDocTotals(); }
@@ -1137,6 +1170,7 @@ document.addEventListener("change",async e=>{
   if(el.id==="task-filter"){ S.taskFilter=el.value; return render(); }
   if(el.id==="lead-region"){ S.leadRegion=el.value; return render(); }
   if(el.id==="exp-month"){ S.expMonth=el.value; return render(); }
+  if(el.id==="doc-filter"){ S.docFilter=el.value; return render(); }
   if(el.id==="exp-cat"){ S.expCategory=el.value; return render(); }
   if(el.id==="tenant-switch") return switchTenant(+el.value);
   if(el.id==="r-show-balance"&&S.sheet?.doc){
@@ -1207,6 +1241,17 @@ async function switchTenant(id){
   catch(err){ toast(err.message); }
 }
 
+/* doc editor toolbar: keep the text selection while clicking buttons */
+document.addEventListener("mousedown",e=>{ if(e.target.closest("#ed-toolbar [data-ed]")) e.preventDefault(); });
+document.addEventListener("click",e=>{ const b=e.target.closest("#ed-toolbar [data-ed]"); if(b) runEd(b.dataset.ed,b); });
+document.addEventListener("change",e=>{
+  if(e.target.id!=="ed-block"||!S.docPage?.editor) return;
+  const v=e.target.value, c=S.docPage.editor.chain().focus();
+  (v==="p"?c.setParagraph():c.setHeading({level:Number(v.slice(1))})).run();
+});
+// Enter in the title moves into the doc
+document.addEventListener("keydown",e=>{ if(e.target.id==="doc-title"&&e.key==="Enter"){ e.preventDefault(); const ed=S.docPage?.editor; if(ed){ ed.commands.setTextSelection(1); ed.view.focus(); } } });
+
 /* drag & drop on boards */
 let dragId=null;
 document.addEventListener("dragstart",e=>{ const c=e.target.closest?.("[data-drag]"); if(!c) return; dragId=Number(c.dataset.drag); e.dataTransfer.effectAllowed="move"; try{e.dataTransfer.setData("text/plain",String(dragId));}catch(_){} });
@@ -1220,6 +1265,215 @@ document.addEventListener("drop",async e=>{
   if(!await update(c,rec.id,{[field]:val})){ rec[field]=before; render(); }
 });
 document.addEventListener("dragend",()=>{ dragId=null; document.querySelectorAll(".col.drop").forEach(x=>x.classList.remove("drop")); });
+
+/* ---------- docs ----------
+ * /docs lists the docs this person can see; /docs/<id> opens one in the editor.
+ * Locked docs are visible only to their creator; shared docs to everyone in the company.
+ * The editor (public/vendor/editor.js, Tiptap) loads the first time a doc is opened.
+ * Changes save automatically a moment after typing stops. */
+const LINK_TYPES={leads:"Lead",clients:"Client",projects:"Project",tasks:"Task",quotes:"Quotation",invoices:"Invoice",expenses:"Expense"};
+const linkLabel=l=>{ const r=byId(l.type,l.id); if(!r) return `${LINK_TYPES[l.type]} (removed)`;
+  return `${LINK_TYPES[l.type]} · ${r.number||r.company||r.name||r.title||r.description||"#"+r.id}`; };
+const linkTarget=l=>["clients","projects"].includes(l.type)?{go:`${l.type==="clients"?"client":"project"}:${l.id}`}:{open:`${l.type}:${l.id}`};
+const ago=iso=>{ if(!iso) return ""; const s=(Date.now()-new Date(iso))/1000;
+  if(s<60) return "just now"; if(s<3600) return Math.floor(s/60)+" min ago"; if(s<86400) return Math.floor(s/3600)+" h ago";
+  if(s<7*86400) return Math.floor(s/86400)+" d ago"; return fmtDate(iso); };
+const visPill=d=>d.visibility==="shared"?`<span class="pill info" title="Everyone in the company can read and edit">Shared</span>`:`<span class="pill" title="Only you can see this doc">🔒 Locked</span>`;
+const myDocTasks=()=>S.data.docs.flatMap(d=>(d.tasks||[]).filter(t=>t.assignee===S.me.id&&!t.done&&t.tid).map(t=>({...t,doc:d})))
+  .sort((a,b)=>(a.due||"9999").localeCompare(b.due||"9999"));
+const docsLinkedTo=(type,id)=>S.data.docs.filter(d=>(d.links||[]).some(l=>l.type===type&&l.id===Number(id)));
+const upsertDocMeta=row=>{ const meta={...row}; delete meta.content; const i=S.data.docs.findIndex(x=>x.id===row.id); if(i>=0) S.data.docs[i]=meta; else S.data.docs.unshift(meta); };
+
+let editorLib=null;
+function loadEditorLib(){
+  if(window.CRMEditor) return Promise.resolve();
+  return editorLib??=new Promise((res,rej)=>{ const s=document.createElement("script"); s.src="/vendor/editor.js"; s.onload=res; s.onerror=()=>{ editorLib=null; rej(new Error("The editor didn't load. Check your connection and try again.")); }; document.head.appendChild(s); });
+}
+
+function viewDocsList(){
+  const f=S.docFilter||"all", q=S.q.docs, me=S.me.id;
+  const filters=[["all","All docs"],["shared","Shared with company"],["locked","Locked (only me)"],["mine","Created by me"],["mentions","Mentioning me"],["tasks","With my tasks"]];
+  const rows=S.data.docs.filter(d=>matches({t:d.title,e:d.excerpt,l:(d.links||[]).map(linkLabel)},q)&&(
+    f==="all"||(f==="shared"&&d.visibility==="shared")||(f==="locked"&&d.visibility!=="shared")||(f==="mine"&&d.created_by===me)||
+    (f==="mentions"&&(d.mentions||[]).includes(me))||(f==="tasks"&&(d.tasks||[]).some(t=>t.assignee===me&&!t.done))));
+  let h=head("Docs","Notes, plans and checklists. Locked docs are visible only to you; shared docs to everyone in the company.",
+    `${searchBox("docs")}<select class="input inline" id="doc-filter" aria-label="Show">${filters.map(([k,l])=>`<option value="${k}" ${k===f?"selected":""}>${l}</option>`).join("")}</select>${addBtn("New doc","new-doc")}`);
+  if(!S.data.docs.length) return h+`<div class="panel">${emptyState("No docs yet","Write meeting notes, project plans and checklists. Add tasks for people, tag colleagues with @, and link a doc to any client, project, quotation or invoice.","Write your first doc","new-doc")}</div>`;
+  if(!rows.length) return h+`<div class="panel">${emptyState("No docs match","Try another filter or search.")}</div>`;
+  return h+`<div class="panel table-wrap"><table class="docs-table"><thead><tr><th>Doc</th><th>Access</th><th>Linked to</th><th class="r">Tasks</th><th>Updated</th></tr></thead><tbody>${rows.map(d=>{
+    const open=(d.tasks||[]).filter(t=>!t.done).length, all=(d.tasks||[]).length, links=d.links||[];
+    return `<tr data-go-detail="doc:${d.id}"><td><div class="cell-main">${esc(d.title||"Untitled")}</div>${d.excerpt?`<div class="cell-sub doc-excerpt">${esc(d.excerpt)}</div>`:""}</td><td>${visPill(d)}</td>
+      <td>${links.slice(0,2).map(l=>`<span class="tag">${esc(linkLabel(l))}</span>`).join(" ")}${links.length>2?` <span class="cell-sub">+${links.length-2}</span>`:""}${links.length?"":"—"}</td>
+      <td class="r num">${all?`${all-open}/${all} done`:"—"}</td><td><div>${esc(userName(d.updated_by))}</div><div class="cell-sub">${ago(d.updated_at)}</div></td></tr>`; }).join("")}</tbody></table></div>`;
+}
+
+// The doc page. Once the editor is on screen, redraws leave it alone (see doRender) and only the
+// surrounding details (save status, links, access) are refreshed.
+function viewDocPage(){
+  const P=S.docPage;
+  if(!P||P.id!==S.param||!P.doc) return `<div class="doc-page" aria-busy="true">${P?.error?`<div class="panel load-error" role="alert"><strong>${esc(P.error)}</strong><a class="btn" href="/docs" data-go="docs">← All docs</a></div>`:`<div class="doc-top"><span class="skel" style="width:90px;height:28px"></span></div><span class="skel" style="width:60%;height:40px;margin:18px 0"></span><div class="skel-lines"><i></i><i></i><i></i><i></i></div>`}</div>`;
+  return `<div class="doc-page">
+    <div class="doc-top"><a class="btn ghost sm" href="/docs" data-go="docs">← Docs</a><span class="doc-status" id="doc-status" aria-live="polite"></span><span class="doc-top-actions" id="doc-actions"></span></div>
+    <div id="doc-conflict"></div>
+    <textarea id="doc-title" class="doc-title" rows="1" placeholder="Untitled" aria-label="Title" maxlength="200">${esc(P.doc.title)}</textarea>
+    <div class="doc-meta" id="doc-meta"></div>
+    <div class="ed-toolbar" id="ed-toolbar" role="toolbar" aria-label="Formatting"></div>
+    <div class="ed-surface" id="ed-surface"></div>
+  </div>`;
+}
+const canChangeAccess=d=>d.created_by===S.me.id;
+const canDeleteDoc=d=>d.created_by===S.me.id||(d.visibility==="shared"&&isAdmin());
+function paintDocChrome(){
+  const P=S.docPage; if(!P?.doc||!$("#doc-meta")) return;
+  const d=P.doc;
+  const st=$("#doc-status");
+  if(st) st.innerHTML=P.status==="saving"?`<span class="spin-dot"></span>Saving…`:P.status==="dirty"?"Unsaved changes":P.status==="error"?`<span class="bad">Couldn't save. Retrying…</span>`:P.status==="conflict"?`<span class="bad">Not saved: see below</span>`:`Saved${P.savedAt?" · "+ago(P.savedAt):""}`;
+  $("#doc-actions").innerHTML=`${canChangeAccess(d)?`<div class="seg" role="group" aria-label="Who can see this doc"><button type="button" data-act="doc-vis" data-v="private" aria-pressed="${d.visibility!=="shared"}">🔒 Locked to me</button><button type="button" data-act="doc-vis" data-v="shared" aria-pressed="${d.visibility==="shared"}">Shared with company</button></div>`:visPill(d)}
+    <button type="button" class="btn sm" data-act="doc-print">Print / PDF</button>${canDeleteDoc(d)?`<button type="button" class="btn sm danger" data-act="doc-delete">Delete</button>`:""}`;
+  const people=d.visibility==="shared"?"":`<span class="doc-locked-note">Only you can see this doc. People you tag or assign won't see it until you share it.</span>`;
+  $("#doc-meta").innerHTML=`<span class="cell-sub">Created by ${esc(userName(d.created_by))} · ${fmtDate(d.created_at)}${d.updated_by?` · edited by ${esc(userName(d.updated_by))} ${ago(d.updated_at)}`:""}</span>
+    <div class="doc-links">${(d.links||[]).map((l,i)=>{ const t=linkTarget(l); return `<span class="link-chip"><a href="${t.go?pageUrl(...t.go.split(":").map((x,j)=>j?Number(x):x)):urlFor({...currentRoute(),record:{col:l.type,id:l.id}})}" ${t.go?`data-go-detail="${t.go}"`:`data-open="${t.open}"`}>${esc(linkLabel(l))}</a><button type="button" data-link-remove="${i}" aria-label="Remove link">×</button></span>`; }).join("")}
+    <button type="button" class="btn sm ghost" data-act="doc-link-add">+ Link to a record</button></div>${people}`;
+}
+function docToolbar(){
+  const B=(cmd,label,icon,title)=>`<button type="button" data-ed="${cmd}" title="${title||label}" aria-label="${title||label}">${icon}</button>`;
+  return `<select id="ed-block" aria-label="Text style"><option value="p">Text</option><option value="h1">Heading 1</option><option value="h2">Heading 2</option><option value="h3">Heading 3</option></select>
+    <span class="ed-sep"></span>${B("bold","Bold","<b>B</b>","Bold (Ctrl+B)")}${B("italic","Italic","<i>I</i>","Italic (Ctrl+I)")}${B("underline","Underline","<u>U</u>","Underline (Ctrl+U)")}${B("strike","Strikethrough","<s>S</s>")}${B("highlight","Highlight",'<span class="ed-hl">H</span>')}${B("code","Inline code","&lt;/&gt;")}${B("link","Link","🔗")}
+    <span class="ed-sep"></span>${B("bullet","Bulleted list","•≡")}${B("ordered","Numbered list","1≡")}${B("task","Task list","☑ Task")}${B("quote","Quote","❝")}${B("codeblock","Code block","{ }")}${B("hr","Divider","―")}${B("table","Table","▦")}
+    <span class="ed-sep"></span>${B("date","Insert date","📅 Date")}${B("mention","Mention someone","@ Tag")}
+    <span class="ed-sep"></span>${B("undo","Undo","↶","Undo (Ctrl+Z)")}${B("redo","Redo","↷","Redo (Ctrl+Shift+Z)")}
+    <span class="ed-table-tools" hidden><span class="ed-sep"></span>${B("rowAfter","Add row","+ Row")}${B("colAfter","Add column","+ Col")}${B("rowDel","Delete row","− Row")}${B("colDel","Delete column","− Col")}${B("tableDel","Delete table","✕ Table")}</span>`;
+}
+function syncToolbar(){
+  const ed=S.docPage?.editor, tb=$("#ed-toolbar"); if(!ed||!tb) return;
+  const on={bold:"bold",italic:"italic",underline:"underline",strike:"strike",highlight:"highlight",code:"code",link:"link",bullet:"bulletList",ordered:"orderedList",task:"taskList",quote:"blockquote",codeblock:"codeBlock"};
+  tb.querySelectorAll("[data-ed]").forEach(b=>{ const k=on[b.dataset.ed]; if(k) b.setAttribute("aria-pressed",String(ed.isActive(k))); });
+  $("#ed-block").value=ed.isActive("heading",{level:1})?"h1":ed.isActive("heading",{level:2})?"h2":ed.isActive("heading",{level:3})?"h3":"p";
+  tb.querySelector('[data-ed="undo"]').disabled=!ed.can().undo(); tb.querySelector('[data-ed="redo"]').disabled=!ed.can().redo();
+  tb.querySelector(".ed-table-tools").hidden=!ed.isActive("table");
+}
+function runEd(cmd,btn){
+  const ed=S.docPage?.editor; if(!ed) return; const c=ed.chain().focus();
+  const map={bold:()=>c.toggleBold(),italic:()=>c.toggleItalic(),underline:()=>c.toggleUnderline(),strike:()=>c.toggleStrike(),highlight:()=>c.toggleHighlight(),code:()=>c.toggleCode(),
+    bullet:()=>c.toggleBulletList(),ordered:()=>c.toggleOrderedList(),task:()=>c.toggleTaskList(),quote:()=>c.toggleBlockquote(),codeblock:()=>c.toggleCodeBlock(),hr:()=>c.setHorizontalRule(),
+    table:()=>c.insertTable({rows:3,cols:3,withHeaderRow:true}),date:()=>c.insertDate(todayISO()),mention:()=>c.insertContent("@"),undo:()=>c.undo(),redo:()=>c.redo(),
+    rowAfter:()=>c.addRowAfter(),colAfter:()=>c.addColumnAfter(),rowDel:()=>c.deleteRow(),colDel:()=>c.deleteColumn(),tableDel:()=>c.deleteTable()};
+  if(cmd==="link") return linkPrompt(btn);
+  map[cmd]?.().run(); syncToolbar();
+}
+function linkPrompt(btn){
+  const ed=S.docPage.editor, cur=ed.getAttributes("link").href||"";
+  CRMEditor.closePop();
+  const el=document.createElement("div"); el.className="ed-pop ed-linkpop";
+  el.innerHTML=`<label for="ed-link-url">Link address</label><input id="ed-link-url" type="url" placeholder="https://…" value="${esc(cur)}"><div class="ed-date-row">${cur?'<button type="button" data-x>Remove link</button>':"<span></span>"}<button type="button" class="primary" data-ok>Apply</button></div>`;
+  document.body.appendChild(el); const r=btn.getBoundingClientRect(); el.style.left=Math.min(r.left,innerWidth-300)+"px"; el.style.top=(r.bottom+6)+"px";
+  const input=el.querySelector("input"); setTimeout(()=>input.focus(),0);
+  const done=()=>{ el.remove(); document.removeEventListener("mousedown",outside); };
+  const apply=()=>{ let v=input.value.trim(); if(v&&!/^(https?:\/\/|mailto:|tel:)/i.test(v)) v="https://"+v;
+    if(!v) ed.chain().focus().extendMarkRange("link").unsetLink().run(); else ed.chain().focus().extendMarkRange("link").setLink({href:v}).run(); done(); };
+  const outside=e=>{ if(!el.contains(e.target)) done(); };
+  setTimeout(()=>document.addEventListener("mousedown",outside),0);
+  el.addEventListener("click",e=>{ if(e.target.closest("[data-ok]")) apply(); if(e.target.closest("[data-x]")){ ed.chain().focus().extendMarkRange("link").unsetLink().run(); done(); } });
+  input.addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); apply(); } if(e.key==="Escape"){ done(); ed.commands.focus(); } });
+}
+
+// Called by the router when /docs/<id> is shown.
+async function enterDocPage(id){
+  if(S.docPage?.id===id&&(S.docPage.doc||S.docPage.loading)) return;
+  leaveDocPage();
+  const P=S.docPage={id,loading:true,status:"saved"};
+  try{
+    const [doc]=await Promise.all([api("GET","/api/docs/"+id),loadEditorLib()]);
+    if(S.docPage!==P) return;
+    P.doc=doc; P.version=doc.version; P.loading=false; upsertDocMeta(doc);
+    doRender(); mountEditor();
+  }catch(e){ if(S.docPage!==P) return; P.loading=false; P.error=/locked|exist/i.test(e.message)?e.message:"This doc didn't load. "+e.message; doRender(); }
+}
+function mountEditor(){
+  const P=S.docPage, host=$("#ed-surface"); if(!P?.doc||!host) return;
+  $("#ed-toolbar").innerHTML=docToolbar();
+  P.editor=CRMEditor.create({ element:host, content:P.doc.content, users:()=>S.users, me:S.me.id,
+    onChange:()=>{ P.status="dirty"; paintDocChrome(); clearTimeout(P.saveT); P.saveT=setTimeout(()=>saveDoc(),900); } });
+  P.editor.on("selectionUpdate",syncToolbar); P.editor.on("transaction",syncToolbar);
+  P.mounted=true; paintDocChrome(); syncToolbar(); fitTitle();
+  if(!P.doc.title) $("#doc-title")?.focus(); else P.editor.commands.focus("start");
+}
+const fitTitle=()=>{ const t=$("#doc-title"); if(t){ t.style.height="auto"; t.style.height=t.scrollHeight+"px"; } };
+// Save the editor's content. Only one save runs at a time; edits made meanwhile are saved right after.
+async function saveDoc({force=false,keepalive=false}={}){
+  const P=S.docPage; if(!P?.editor||P.status==="conflict"&&!force) return;
+  clearTimeout(P.saveT);
+  if(P.saving){ P.again=true; return P.saving; }
+  const content=P.editor.getJSON();
+  P.status="saving"; paintDocChrome();
+  P.saving=(async()=>{
+    try{
+      const body=JSON.stringify({content,base_version:P.version,...(force?{force:true}:{})});
+      if(keepalive){ fetch("/api/docs/"+P.id,{method:"PUT",headers:{"Content-Type":"application/json"},body,keepalive:true,credentials:"same-origin"}); return; }
+      const res=await fetch("/api/docs/"+P.id,{method:"PUT",headers:{"Content-Type":"application/json"},body,credentials:"same-origin"});
+      const data=await res.json().catch(()=>null);
+      if(S.docPage!==P) return;
+      if(res.status===409){ P.status="conflict"; P.theirs=data.doc; showConflict(); return; }
+      if(!res.ok) throw new Error(data?.error||"Save failed");
+      P.version=data.version; P.doc={...P.doc,...data}; upsertDocMeta(data); P.savedAt=new Date().toISOString();
+      P.status=P.again||P.status==="dirty"?"dirty":"saved";
+    }catch(e){ if(S.docPage!==P) return; P.status="error"; P.saveT=setTimeout(()=>saveDoc(),5000); }
+    finally{ P.saving=null; paintDocChrome(); if(P.again&&S.docPage===P){ P.again=false; saveDoc(); } }
+  })();
+  return P.saving;
+}
+function showConflict(){
+  const P=S.docPage, box=$("#doc-conflict"); if(!box) return;
+  box.innerHTML=`<div class="doc-conflict" role="alert"><div><strong>${esc(userName(P.theirs?.updated_by))} changed this doc while you were editing.</strong> Your latest changes are not saved yet. Choose which version to keep.</div>
+    <div class="toolbar"><button type="button" class="btn" data-act="doc-theirs">Load their version</button><button type="button" class="btn primary" data-act="doc-mine">Keep mine (replace theirs)</button></div></div>`;
+  paintDocChrome();
+}
+// Leaving the page: save anything pending, then let the editor go.
+async function flushDoc(){ const P=S.docPage; if(P?.editor&&["dirty","error"].includes(P.status)) await saveDoc(); else if(P?.saving) await P.saving; }
+function leaveDocPage(){ const P=S.docPage; if(!P) return; clearTimeout(P.saveT); clearTimeout(P.titleT); P.editor?.destroy(); window.CRMEditor?.closePop(); S.docPage=null; }
+async function saveDocField(body){
+  const P=S.docPage; if(!P) return;
+  try{ const row=await api("PUT","/api/docs/"+P.id,body); if(S.docPage!==P) return; P.doc={...P.doc,...row,content:P.doc.content}; P.version=row.version; upsertDocMeta(row); P.savedAt=new Date().toISOString(); paintDocChrome(); return row; }
+  catch(e){ toast(e.message); }
+}
+async function createDoc(links=[]){
+  try{ const row=await api("POST","/api/docs",{title:"",links,visibility:"private"}); upsertDocMeta(row); await navigate({view:"doc",param:row.id},{force:true}); }
+  catch(e){ toast(e.message); }
+}
+function pickLink(btn){
+  const P=S.docPage, have=new Set((P.doc.links||[]).map(l=>l.type+l.id));
+  const items=Object.keys(LINK_TYPES).flatMap(type=>S.data[type].map(r=>({type,id:r.id,label:linkLabel({type,id:r.id})}))).filter(i=>!have.has(i.type+i.id));
+  new CRMEditor.ListPop({items,search:true,placeholder:"Search clients, projects, invoices…",rect:btn.getBoundingClientRect(),emptyText:"Nothing to link",
+    renderItem:it=>`<span>${esc(it.label)}</span>`,
+    onPick:it=>{ CRMEditor.closePop(); saveDocField({links:[...(P.doc.links||[]),{type:it.type,id:it.id}]}); }});
+}
+// Docs section for a record panel or page.
+function linkedDocsHtml(type,id){
+  const list=docsLinkedTo(type,id);
+  return `<h3 class="sub-head">Docs</h3>${list.length?`<ul class="list-plain linked-docs">${list.map(d=>`<li data-go-detail="doc:${d.id}"><span><span class="cell-main">${esc(d.title||"Untitled")}</span>${d.excerpt?`<br><span class="cell-sub">${esc(d.excerpt.slice(0,90))}</span>`:""}</span><span class="meta">${visPill(d)}</span></li>`).join("")}</ul>`:`<p class="hint">No docs linked yet.</p>`}
+    <button type="button" class="btn sm" data-act="new-doc" data-link="${type}:${id}">+ New linked doc</button>`;
+}
+function myTasksPanel(){
+  const tasks=myDocTasks(), t=todayISO();
+  return `<section class="panel"><h2>Assigned to me in docs</h2>${tasks.length?`<ul class="list-plain my-tasks">${tasks.slice(0,10).map(x=>`<li><label class="check-line"><input type="checkbox" data-doc-task="${x.doc.id}|${esc(x.tid)}" aria-label="Mark done"></label><span class="grow" data-go-detail="doc:${x.doc.id}"><span class="cell-main">${esc(x.text||"Untitled task")}</span><br><span class="cell-sub">${esc(x.doc.title||"Untitled")}</span></span><span class="meta" style="${x.due&&x.due<t?"color:var(--bad)":""}">${x.due?(x.due<t?"Overdue · ":"")+fmtDate(x.due):""}</span></li>`).join("")}</ul>`:`<div class="empty">Nothing assigned to you in docs.</div>`}</section>`;
+}
+
+/* notifications (the bell) */
+async function refreshUnread(){ try{ const r=await api("GET","/api/notifications"); S.notifs=r.items; S.unread=r.unread; paintBell(); }catch(e){} }
+function paintBell(){ const b=$("#bell-count"); if(b){ b.textContent=S.unread>9?"9+":String(S.unread||""); b.hidden=!S.unread; } $("#bell")?.setAttribute("aria-label",`Notifications${S.unread?` (${S.unread} unread)`:""}`); }
+async function openBell(btn){
+  CRMEditor?.closePop?.();
+  const old=$("#notif-pop"); if(old){ old.remove(); return; }
+  await refreshUnread();
+  const el=document.createElement("div"); el.id="notif-pop"; el.className="notif-pop"; el.setAttribute("role","dialog"); el.setAttribute("aria-label","Notifications");
+  const items=S.notifs||[];
+  el.innerHTML=`<div class="notif-head"><b>Notifications</b>${S.unread?`<button type="button" class="btn ghost sm" data-act="notif-all">Mark all read</button>`:""}</div>${items.length?`<ul>${items.map(n=>`<li class="${n.read_at?"":"unread"}" data-notif="${n.id}|${n.doc_id}"><span class="ed-av">${esc((userName(n.actor_id)||"?").split(/\s+/).map(w=>w[0]).join("").slice(0,2).toUpperCase())}</span><span><b>${esc(userName(n.actor_id))}</b> ${n.kind==="task"?`assigned you <b>“${esc(n.text||"a task")}”</b> in`:"mentioned you in"} <b>${esc(n.doc_title||"Untitled")}</b><br><span class="cell-sub">${ago(n.created_at)}</span></span></li>`).join("")}</ul>`:`<div class="empty">You're all caught up.</div>`}`;
+  document.body.appendChild(el);
+  const r=btn.getBoundingClientRect(); el.style.top=(r.bottom+8)+"px"; el.style.left=Math.max(8,Math.min(r.left,innerWidth-el.offsetWidth-8))+"px";
+  const outside=e=>{ if(!el.contains(e.target)&&!btn.contains(e.target)){ el.remove(); document.removeEventListener("mousedown",outside); } };
+  setTimeout(()=>document.addEventListener("mousedown",outside),0);
+}
+setInterval(()=>{ if(S.ready&&document.visibilityState==="visible") refreshUnread(); },60000);
 
 start();
 })();

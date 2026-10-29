@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --env-file-if-exists=.env --watch server.js"
+    "dev": "node --env-file-if-exists=.env --watch server.js",
+    "build:editor": "esbuild editor/entry.js --bundle --minify --format=iife --target=es2020 --legal-comments=eof --outfile=public/vendor/editor.js"
   },
   "author": "",
   "license": "UNLICENSED",
@@ -16,5 +17,17 @@
   "engines": {
     "node": ">=22"
   },
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "@tiptap/core": "3.32.0",
+    "@tiptap/extension-highlight": "3.32.0",
+    "@tiptap/extension-list": "3.32.0",
+    "@tiptap/extension-mention": "3.32.0",
+    "@tiptap/extension-table": "3.32.0",
+    "@tiptap/extensions": "3.32.0",
+    "@tiptap/pm": "3.32.0",
+    "@tiptap/starter-kit": "3.32.0",
+    "@tiptap/suggestion": "3.32.0",
+    "esbuild": "0.28.2"
+  }
 }
