@@ -44,7 +44,7 @@ const ENTITIES = {
   projects: {
     label: "project",
     fields: { name: "text", client_id: "num", status: "text", start_date: "text", due_date: "text",
-      budget: "num", owner_id: "num", description: "text", region: "text" },
+      budget: "num", owner_id: "num", description: "text", region: "text", split: "json" },
     required: ["name"],
   },
   tasks: {
@@ -72,8 +72,14 @@ const ENTITIES = {
   expenses: {
     label: "expense",
     fields: { date: "text", amount: "num", category: "text", description: "text", vendor: "text",
-      payment_method: "text", paid_by: "num", project_id: "num", notes: "text" },
+      payment_method: "text", paid_by: "num", project_id: "num", notes: "text", paid_from: "text" },
     required: ["date", "amount", "description"],
+  },
+  // money handed from one person (or the company fund) to another
+  settlements: {
+    label: "settlement",
+    fields: { date: "text", amount: "num", from_party: "text", to_party: "text", method: "text", note: "text" },
+    required: ["date", "amount", "from_party", "to_party"],
   },
 };
 const SQL_TYPE = { text: "TEXT", num: "DOUBLE PRECISION", json: "JSONB" };
@@ -89,6 +95,16 @@ const DEFAULT_SETTINGS = {
   leadSources: ["Website", "Referral", "Social media", "Cold outreach", "Event", "Advertising", "Other"],
   expenseCategories: ["Rent", "Salaries", "Travel", "Software & subscriptions", "Office supplies", "Utilities",
     "Marketing", "Professional fees", "Other"],
+  // how money received on a project is divided; must total 100
+  moneyRoles: [
+    { key: "partner1", label: "Partner 1", pct: 10, user_id: null },
+    { key: "partner2", label: "Partner 2", pct: 10, user_id: null },
+    { key: "partner3", label: "Partner 3", pct: 10, user_id: null },
+    { key: "developer", label: "Developer", pct: 20, user_id: null },
+    { key: "lead", label: "Lead", pct: 10, user_id: null },
+    { key: "company", label: "Company", pct: 40, company: true },
+  ],
+  moneyKeeper: null, // who keeps the company fund
 };
 
 // Creates tables on first use, adds columns newer versions introduced, and moves data from the
@@ -238,7 +254,63 @@ function httpError(status, message) { const e = new Error(message); e.status = s
 const logActivity = (tenantId, entity, entityId, action, summary, userId) =>
   q("INSERT INTO activity (tenant_id, entity, entity_id, action, summary, user_id, at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
     [tenantId, entity, entityId, action, summary || null, userId, now()]);
-const describe = rec => rec.name || rec.title || rec.number || rec.description || `#${rec.id}`;
+const describe = rec => rec.name || rec.title || rec.number || rec.description || (rec.from_party ? `of ${rec.amount}` : `#${rec.id}`);
+
+/* ---------- money: split settings, parties ----------
+ * A party is "company" (the company fund) or a user id. */
+async function isParty(v, tenantId) {
+  if (v === "company") return true;
+  const id = Number(v);
+  return Number.isInteger(id) && !!(await one(`SELECT 1 FROM users WHERE id = $1 AND (tenant_id = $2 OR role = 'superadmin')`, [id, tenantId]));
+}
+function cleanRoles(v) {
+  if (!Array.isArray(v) || !v.length || v.length > 20) throw httpError(400, "Add at least one share.");
+  const seen = new Set();
+  const roles = v.map((r, i) => {
+    const pct = Math.round(Number(r?.pct) * 100) / 100;
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) throw httpError(400, "Each percentage must be between 0 and 100.");
+    let key = String(r?.key || "").replace(/[^a-z0-9_-]/gi, "").slice(0, 30) || `role${i + 1}`;
+    while (seen.has(key)) key += "_";
+    seen.add(key);
+    const label = String(r?.label || "").trim().slice(0, 40);
+    if (!label) throw httpError(400, "Every share needs a name.");
+    return r?.company ? { key, label, pct, company: true } : { key, label, pct, user_id: Number.isInteger(Number(r?.user_id)) && r.user_id ? Number(r.user_id) : null };
+  });
+  if (roles.filter(r => r.company).length !== 1) throw httpError(400, "Keep exactly one Company share.");
+  const total = roles.reduce((a, r) => a + r.pct, 0);
+  if (Math.abs(total - 100) > 0.01) throw httpError(400, `The shares add up to ${Math.round(total * 100) / 100}%. They must total 100%.`);
+  return roles;
+}
+// a project's own changes to the split: [{key, pct?, user_id?}]
+function cleanProjectSplit(json) {
+  let list; try { list = JSON.parse(json || "[]"); } catch { list = []; }
+  return JSON.stringify(list.slice(0, 20).map(o => ({
+    key: String(o?.key || "").slice(0, 30),
+    ...(o?.pct != null && o.pct !== "" && Number.isFinite(Number(o.pct)) ? { pct: Math.max(0, Math.min(100, Math.round(Number(o.pct) * 100) / 100)) } : {}),
+    ...(o?.user_id ? { user_id: Number(o.user_id) } : {}),
+  })).filter(o => o.key));
+}
+// checks for records whose rules go beyond field types
+async function validateRecord(req, entity, values, before) {
+  if (entity === "expenses" && "paid_from" in values) {
+    values.paid_from = values.paid_from === "personal" ? "personal" : "company";
+  }
+  if (entity === "projects" && "split" in values) {
+    values.split = cleanProjectSplit(values.split);
+    if (req.user.role === "member" && values.split !== cleanProjectSplit(JSON.stringify(before?.split || []))) {
+      if (before || values.split !== "[]") throw httpError(403, "Only administrators can change how a project's money is split.");
+    }
+  }
+  if (entity === "settlements") {
+    const v = { ...(before || {}), ...values };
+    if (!(Number(v.amount) > 0)) throw httpError(400, "Enter an amount above zero.");
+    if (!(await isParty(v.from_party, req.tenantId)) || !(await isParty(v.to_party, req.tenantId))) throw httpError(400, "Choose who paid and who received.");
+    if (String(v.from_party) === String(v.to_party)) throw httpError(400, "The payer and the receiver must be different.");
+    // the people involved, or an administrator, record and change settlements
+    const me = String(req.user.id), involved = [String(v.from_party), String(v.to_party)].includes(me);
+    if (req.user.role === "member" && !involved) throw httpError(403, "Only an administrator or one of the two people involved can record this.");
+  }
+}
 
 /* ---------- app ---------- */
 const app = express();
@@ -406,7 +478,9 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
     if (key === "logo" && v && v.length > 1_500_000) throw httpError(400, "Logo is too large. Use an image under 1 MB.");
     if (key === "brandColor" && v && !/^#[0-9a-f]{6}$/i.test(v)) throw httpError(400, "Brand colour must be a hex value like #b8652c.");
     if (key === "docLayout") v = cleanLayout(v);
-    if (Array.isArray(DEFAULT_SETTINGS[key])) v = (Array.isArray(v) ? v : []).map(s => String(s).trim()).filter(Boolean).slice(0, 200);
+    if (key === "moneyRoles") v = cleanRoles(v);
+    if (key === "moneyKeeper") v = v && (await isParty(v, req.tenantId)) && v !== "company" ? Number(v) : null;
+    if (Array.isArray(DEFAULT_SETTINGS[key]) && key !== "moneyRoles") v = (Array.isArray(v) ? v : []).map(s => String(s).trim()).filter(Boolean).slice(0, 200);
     await putSetting(req.tenantId, key, v);
   }
   if (body.companyName) await q("UPDATE tenants SET name = $1 WHERE id = $2", [String(body.companyName).trim(), req.tenantId]);
@@ -722,6 +796,8 @@ async function numberReceipts(req, values, before) {
       date: isoDate(p.date), amount: Math.round(amount * 100) / 100,
       method: String(p.method || "").slice(0, 40), ref: String(p.ref || "").slice(0, 80), note: String(p.note || "").slice(0, 300),
       show_balance: p.show_balance === true,
+      // who took the money: the company fund, or a person
+      received_by: p.received_by != null && p.received_by !== "company" && Number.isInteger(Number(p.received_by)) ? Number(p.received_by) : "company",
       by: Number.isInteger(p.by) ? p.by : req.user.id,
     };
     if (old && !used.has(p.receipt_no)) { used.add(p.receipt_no); return { ...clean, receipt_no: old.receipt_no, issued_at: old.issued_at, by: old.by ?? clean.by }; }
@@ -740,6 +816,7 @@ app.post("/api/:entity", entityGuard, async (req, res) => {
   const values = clean(entity, req.body || {});
   for (const f of req.ent.required) if (values[f] == null || values[f] === "") throw httpError(400, `${f.replace(/_/g, " ")} is required.`);
   await checkLinks(values, req.tenantId);
+  await validateRecord(req, entity, values, null);
   await uniqueCheck(req, entity, values);
   const t = now();
   const rec = await saving(req, entity, values, async () => {
@@ -759,6 +836,7 @@ app.put("/api/:entity/:id", entityGuard, async (req, res) => {
   const values = clean(entity, req.body || {});
   for (const f of req.ent.required) if (f in values && (values[f] == null || values[f] === "")) throw httpError(400, `${f.replace(/_/g, " ")} is required.`);
   await checkLinks(values, req.tenantId);
+  await validateRecord(req, entity, values, before);
   await uniqueCheck(req, entity, values, id);
   const cols = Object.keys(values);
   const n = cols.length;
@@ -787,7 +865,7 @@ app.delete("/api/:entity/:id", entityGuard, async (req, res) => {
   const entity = req.params.entity, id = Number(req.params.id);
   const rec = await one(`SELECT * FROM ${entity} WHERE id = $1 AND tenant_id = $2`, [id, req.tenantId]);
   if (!rec) return res.json({ ok: true });
-  if (req.user.role === "member" && rec.created_by !== req.user.id) {
+  if (req.user.role === "member" && rec.created_by !== req.user.id && !(entity === "settlements" && [rec.from_party, rec.to_party].includes(String(req.user.id)))) {
     return res.status(403).json({ error: "Only an administrator or the person who added this record can delete it." });
   }
   await q(`DELETE FROM ${entity} WHERE id = $1 AND tenant_id = $2`, [id, req.tenantId]);

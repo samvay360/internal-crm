@@ -2,7 +2,7 @@
 "use strict";
 
 /* ---------- constants ---------- */
-const COLS = ["leads","clients","projects","tasks","quotes","invoices","expenses"];
+const COLS = ["leads","clients","projects","tasks","quotes","invoices","expenses","settlements"];
 const LEAD_STAGES = ["New","Contacted","Qualified","Proposal","Negotiation","Won","Lost"];
 const PROJECT_STATUS = ["Planning","Active","On hold","Completed","Cancelled"];
 const TASK_STATUS = ["To do","In progress","Review","Done"];
@@ -12,12 +12,12 @@ const INVOICE_STATUS = ["Draft","Sent","Void"];
 const PAY_METHODS = ["Bank transfer","Cash","Card","Cheque","Online","Other"];
 const NAV = [
   ["overview","Overview"],["leads","Leads"],["clients","Clients"],["projects","Projects"],["tasks","Tasks"],["docs","Docs"],
-  ["sep"],["quotes","Quotations"],["invoices","Invoices"],["expenses","Expenses"],["sep"],["settings","Settings"]
+  ["sep"],["quotes","Quotations"],["invoices","Invoices"],["expenses","Expenses"],["money","Money"],["sep"],["settings","Settings"]
 ];
 
 /* ---------- state ---------- */
 const S = {
-  data:{leads:[],clients:[],projects:[],tasks:[],quotes:[],invoices:[],expenses:[],docs:[]}, unread:0, docFilter:"all",
+  data:{leads:[],clients:[],projects:[],tasks:[],quotes:[],invoices:[],expenses:[],settlements:[],docs:[]}, unread:0, docFilter:"all",
   settings:{}, users:[], me:null, activity:[],
   view:"overview", param:null, q:{}, mode:{leads:"board",tasks:"board"},
   taskFilter:"all", leadRegion:"", expMonth:null, expCategory:"", settingsTab:"company", sheet:null,
@@ -240,9 +240,9 @@ const skeletonPage=()=>`<div class="head"><div><span class="skel" style="width:2
  * An open record panel adds ?record=<collection>/<id|new>, so Back closes it and a link can open it.
  * A route is {view, param, tab, record:{col,id}|null}. */
 const PATHS={overview:"",leads:"leads",clients:"clients",client:"clients",projects:"projects",project:"projects",tasks:"tasks",
-  quotes:"quotations",invoices:"invoices",expenses:"expenses",settings:"settings",docs:"docs",doc:"docs"};
-const VIEW_OF={docs:"docs",leads:"leads",clients:"clients",projects:"projects",tasks:"tasks",quotations:"quotes",invoices:"invoices",expenses:"expenses",settings:"settings"};
-const TITLES={docs:"Docs",overview:"Overview",leads:"Leads",clients:"Clients",projects:"Projects",tasks:"Tasks",quotes:"Quotations",invoices:"Invoices",expenses:"Expenses",settings:"Settings"};
+  quotes:"quotations",invoices:"invoices",expenses:"expenses",money:"money",settings:"settings",docs:"docs",doc:"docs"};
+const VIEW_OF={money:"money",docs:"docs",leads:"leads",clients:"clients",projects:"projects",tasks:"tasks",quotations:"quotes",invoices:"invoices",expenses:"expenses",settings:"settings"};
+const TITLES={money:"Money",docs:"Docs",overview:"Overview",leads:"Leads",clients:"Clients",projects:"Projects",tasks:"Tasks",quotes:"Quotations",invoices:"Invoices",expenses:"Expenses",settings:"Settings"};
 const sameRecord=(a,b)=>(!a&&!b)||(!!a&&!!b&&a.col===b.col&&String(a.id)===String(b.id));
 
 function routeFromUrl(){
@@ -380,7 +380,7 @@ function doRender(){
   // typed-in values belong to one page of one company; forget them when either changes
   const key=[S.view,S.param,S.tenant?.id].join("|");
   if(key!==S.dirtyKey){ S.dirty={}; S.dirtyKey=key; }
-  const views={overview:viewOverview,leads:viewLeads,clients:viewClients,projects:viewProjects,tasks:viewTasks,quotes:()=>viewDocs("quotes"),invoices:()=>viewDocs("invoices"),expenses:viewExpenses,settings:viewSettings,client:viewClient,project:viewProject,docs:viewDocsList,doc:viewDocPage};
+  const views={overview:viewOverview,leads:viewLeads,clients:viewClients,projects:viewProjects,tasks:viewTasks,quotes:()=>viewDocs("quotes"),invoices:()=>viewDocs("invoices"),expenses:viewExpenses,money:viewMoney,settings:viewSettings,client:viewClient,project:viewProject,docs:viewDocsList,doc:viewDocPage};
   main.innerHTML=(views[S.view]||viewOverview)();
   main.removeAttribute("aria-busy");
   if(S.viewEnter){ S.viewEnter=false; main.classList.remove("view-enter"); void main.offsetWidth; main.classList.add("view-enter"); }
@@ -501,7 +501,7 @@ function viewProject(){
   let h=head(p.name,`<a class="btn ghost sm" href="/projects" data-go="projects">← All projects</a>`,`<button class="btn" data-open="projects:${p.id}">Edit</button><button class="btn" data-act="new-invoices" data-client="${p.client_id||""}" data-project="${p.id}">Invoice this project</button><button class="btn" data-act="new-expense">Add expense</button><button class="btn primary" data-act="new-task" data-project="${p.id}">Add task</button>`);
   const cells=[["Client",p.client_id?`<a href="/clients/${p.client_id}" data-go-detail="client:${p.client_id}">${esc(clientName(p.client_id))}</a>`:"Internal"],["Status",pill(p.status||"Planning")],["Project lead",esc(p.owner_id?userName(p.owner_id):"—")],["Start",fmtDate(p.start_date)],["Due",fmtDate(p.due_date)],["Budget",`<span class="num">${p.budget?money(p.budget):"—"}</span>`],["Expenses",`<span class="num" style="${p.budget&&spent>p.budget?"color:var(--bad)":""}">${money(spent)}</span>${p.budget?` <span class="cell-sub">of ${money(p.budget)} budget</span>`:""}`],["Invoiced",`<span class="num">${money(billed)}</span>`],["Progress",`${pr.pct}% <span class="cell-sub">(${pr.done} of ${pr.n} tasks)</span>`]];
   h+=`<div class="panel" style="margin-bottom:16px"><dl class="detail-grid">${cells.map(([k,v])=>`<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>${p.description?`<div style="padding:0 16px 16px;white-space:pre-wrap;color:var(--muted)">${esc(p.description)}</div>`:""}</div>`;
-  h+=`<section class="panel linked-panel" style="margin-bottom:16px">${linkedDocsHtml("projects",p.id)}</section>`;
+  h+=`<div class="grid2" style="margin-bottom:16px">${projectMoneyPanel(p)}<section class="panel linked-panel">${linkedDocsHtml("projects",p.id)}</section></div>`;
   return h+(tasks.length?taskBoard(tasks):`<div class="panel">${emptyState("No tasks in this project","Break the work into tasks and assign them to people on your team.","Add a task","new-task")}</div>`);
 }
 
@@ -574,7 +574,7 @@ function viewExpenses(){
   </div>`;
   if(!rows.length) return h+`<div class="panel">${emptyState("Nothing in this period","Try another month or category, or add an expense.","Add expense","new-expense")}</div>`;
   h+=`<div class="grid2" style="grid-template-columns:minmax(0,2fr) minmax(260px,1fr);align-items:start">
-  <div class="panel table-wrap"><table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Paid by</th><th>Method</th><th class="r">Amount</th></tr></thead><tbody>${rows.map(e=>`<tr data-open="expenses:${e.id}"><td style="white-space:nowrap">${fmtDate(e.date)}</td><td><div class="cell-main">${esc(e.description)}</div><div class="cell-sub">${esc([e.vendor,projectName(e.project_id)].filter(Boolean).join(" · "))}</div></td><td>${e.category?`<span class="tag">${esc(e.category)}</span>`:"—"}</td><td>${esc(e.paid_by?userName(e.paid_by):"—")}</td><td>${esc(e.payment_method||"—")}</td><td class="r num">${money(e.amount)}</td></tr>`).join("")}
+  <div class="panel table-wrap"><table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Paid by</th><th>Method</th><th class="r">Amount</th></tr></thead><tbody>${rows.map(e=>`<tr data-open="expenses:${e.id}"><td style="white-space:nowrap">${fmtDate(e.date)}</td><td><div class="cell-main">${esc(e.description)}</div><div class="cell-sub">${esc([e.vendor,projectName(e.project_id)].filter(Boolean).join(" · "))}</div></td><td>${e.category?`<span class="tag">${esc(e.category)}</span>`:"—"}</td><td>${esc(e.paid_by?userName(e.paid_by):"—")}${e.paid_from==="personal"?' <span class="tag" title="Paid from their own pocket; the company pays them back">own pocket</span>':""}</td><td>${esc(e.payment_method||"—")}</td><td class="r num">${money(e.amount)}</td></tr>`).join("")}
   <tr><td colspan="5" class="cell-main">Total</td><td class="r num cell-main">${money(total)}</td></tr></tbody></table></div>
   <section class="panel"><h2>By category</h2><div style="padding:14px 18px;display:grid;gap:12px">${byCat.map(([c,v])=>`<div style="display:grid;gap:4px;font-size:13px"><div style="display:flex;justify-content:space-between;gap:8px"><span>${esc(c)}</span><span class="num">${money(v)} <span class="cell-sub">${Math.round(v/total*100)}%</span></span></div><div class="progress"><i style="width:${(v/maxC*100).toFixed(1)}%"></i></div></div>`).join("")}</div></section>
   </div>`;
@@ -584,7 +584,7 @@ function viewExpenses(){
 /* ---------- settings ---------- */
 function viewSettings(){
   const tabs=[["company","Company"],["branding","Branding"],["lists","Lists"],["team",isSuper()?"Accounts":"Team"],["account","My account"]];
-  if(isAdmin()) tabs.splice(3,0,["documents","Documents"]);
+  if(isAdmin()) tabs.splice(3,0,["documents","Documents"],["money","Money"]);
   const tab=S.settingsTab;
   let h=head("Settings",isSuper()?`Settings for ${esc(S.tenant?.name||"this company")}, plus every company and user account.`:isAdmin()?"Company details, branding and lists. Accounts are created by the super admin.":"Your account. Company settings can be changed by an administrator.");
   h+=`<div class="tabs" role="tablist">${tabs.map(([k,l])=>`<button role="tab" data-stab="${k}" aria-selected="${tab===k}">${l}</button>`).join("")}</div>`;
@@ -614,6 +614,7 @@ function viewSettings(){
     <div class="field"><label for="s-expenseCategories">Expense categories</label><textarea class="input" id="s-expenseCategories" style="min-height:180px" ${dis}>${esc((s.expenseCategories||[]).join("\n"))}</textarea><span class="hint">One per line. Offered when adding expenses.</span></div>
     </div>${saveBtn}</form>`;
   if(tab==="documents"&&isAdmin()) h+=layoutEditor();
+  if(tab==="money"&&isAdmin()) h+=moneySettingsHtml();
   if(tab==="team") h+=isSuper()?accountsAdmin():teamList();
   if(tab==="account") h+=`<form class="panel" id="account-form" style="padding:18px;max-width:560px"><div class="form">
     <div class="field full"><label for="m-name">Your name</label><input class="input" id="m-name" value="${esc(S.me.name)}"></div>
@@ -743,7 +744,12 @@ const FORMS = {
     ["amount","Amount","number",{req:1}],["date","Date","date",{req:1}],
     ["category","Category","select",{opts:()=>["",...(S.settings.expenseCategories||[])]}],["vendor","Paid to","text",{ph:"Vendor or person"}],
     ["payment_method","Payment method","select",{opts:()=>["",...PAY_METHODS]}],["paid_by","Paid by","person"],
-    ["project_id","Project","project"],["notes","Notes","textarea",{full:1,ph:"Bill or reference number, anything useful later"}]]}
+    ["paid_from","Paid from","choice",{opts:()=>[["company","Company money"],["personal","Own pocket (company pays them back)"]]}],
+    ["project_id","Project","project"],["notes","Notes","textarea",{full:1,ph:"Bill or reference number, anything useful later"}]]},
+  settlements:{title:"settlement",fields:[
+    ["from_party","Paid by","party",{req:1}],["to_party","Paid to","party",{req:1}],
+    ["amount","Amount","number",{req:1}],["date","Date","date",{req:1}],
+    ["method","Method","select",{opts:()=>["",...PAY_METHODS]}],["note","Note","text",{ph:"e.g. Partner share for October"}]]}
 };
 function options(list,v,blank){
   const all=[...list]; if(v&&!all.includes(v)) all.push(v);
@@ -757,6 +763,8 @@ function fieldHtml([key,label,type="text",o={}],rec){
   if(type==="region") return `<div class="${cls}">${lab}<input class="input" id="${id}" name="${key}" data-type="${type}" list="${id}-list" value="${esc(v)}" placeholder="Pick or type a region" autocomplete="off"><datalist id="${id}-list">${(S.settings.regions||[]).map(r=>`<option value="${esc(r)}">`).join("")}</datalist></div>`;
   if(type==="client") return sel(`<option value="">— None —</option>`+[...S.data.clients].sort((a,b)=>(a.company||a.name).localeCompare(b.company||b.name)).map(c=>`<option value="${c.id}" ${c.id===v?"selected":""}>${esc(c.company||c.name)}</option>`).join(""));
   if(type==="project") return sel(`<option value="">— None —</option>`+S.data.projects.map(p=>`<option value="${p.id}" ${p.id===v?"selected":""}>${esc(p.name)}</option>`).join(""));
+  if(type==="choice") return sel(o.opts().map(([val,label])=>`<option value="${esc(val)}" ${String(v||o.opts()[0][0])===val?"selected":""}>${esc(label)}</option>`).join(""));
+  if(type==="party") return sel(`<option value="">Choose…</option><option value="company" ${v==="company"?"selected":""}>${esc(fundLabel())}</option>`+moneyPeople().map(u=>`<option value="${u.id}" ${String(v)===String(u.id)?"selected":""}>${esc(u.name)}${u.id===S.me.id?" (you)":""}</option>`).join(""));
   if(type==="person") return sel(`<option value="">Unassigned</option>`+S.users.filter(u=>u.active||u.id===v).map(u=>`<option value="${u.id}" ${u.id===v?"selected":""}>${esc(u.name)}${u.id===S.me.id?" (you)":""}</option>`).join(""));
   if(type==="textarea") return `<div class="${cls}">${lab}<textarea class="input" id="${id}" name="${key}">${esc(v)}</textarea></div>`;
   return `<div class="${cls}">${lab}<input class="input" id="${id}" name="${key}" type="${type}" value="${esc(v)}" placeholder="${esc(o.ph||"")}" ${type==="number"?'step="any"':""} ${o.req?"required":""}></div>`;
@@ -804,15 +812,15 @@ function showRecord(col,id,preset={}){
   const F=FORMS[col]; if(!F) return false;
   if(id&&!byId(col,id)){ hideSheet(); toast("That record no longer exists."); return false; }
   const rec=id?{...byId(col,id)}:{...preset};
-  if(!id){ if(col==="leads"){ rec.stage??="New"; rec.owner_id??=S.me.id; } if(col==="projects") rec.status??="Planning"; if(col==="expenses"){ rec.date??=todayISO(); rec.paid_by??=S.me.id; } if(col==="tasks"){ rec.status??="To do"; rec.priority??="Medium"; } }
+  if(!id){ if(col==="leads"){ rec.stage??="New"; rec.owner_id??=S.me.id; } if(col==="projects") rec.status??="Planning"; if(col==="expenses"){ rec.date??=todayISO(); rec.paid_by??=S.me.id; rec.paid_from??="company"; } if(col==="settlements"){ rec.date??=todayISO(); } if(col==="tasks"){ rec.status??="To do"; rec.priority??="Medium"; } }
   S.sheet={col,id:id?Number(id):null};
   const canDelete=id&&(isAdmin()||rec.created_by===S.me.id);
   let extra="";
   if(col==="leads"&&id) extra+=`<button type="button" class="btn" data-act="convert-lead">${rec.client_id&&byId("clients",rec.client_id)?"View client":"Convert to client"}</button>`;
-  openSheet(`<form id="rec-form" style="display:contents" novalidate><div class="sheet-head"><h2 id="sheet-title">${id?esc(rec.name||rec.title||rec.description):"New "+F.title}</h2><button type="button" class="btn ghost" data-close aria-label="Close">✕</button></div>
-  <div class="sheet-body">${metaStrip(rec)}<div class="form">${F.fields.map(f=>fieldHtml(f,rec)).join("")}</div>${id?linkedDocsHtml(col,id):""}${id?`<h3 class="sub-head">History</h3><div id="history" aria-busy="true"><div class="skel-lines"><i></i><i></i><i></i></div></div>`:""}</div>
+  openSheet(`<form id="rec-form" style="display:contents" novalidate><div class="sheet-head"><h2 id="sheet-title">${id?esc(rec.name||rec.title||rec.description||(col==="settlements"?`Settlement · ${money(rec.amount)}`:"")):"New "+F.title}</h2><button type="button" class="btn ghost" data-close aria-label="Close">✕</button></div>
+  <div class="sheet-body">${metaStrip(rec)}<div class="form">${F.fields.map(f=>fieldHtml(f,rec)).join("")}</div>${col==="projects"?splitEditorHtml(rec):""}${id&&col!=="settlements"?linkedDocsHtml(col,id):""}${id?`<h3 class="sub-head">History</h3><div id="history" aria-busy="true"><div class="skel-lines"><i></i><i></i><i></i></div></div>`:""}</div>
   <div class="sheet-foot"><div class="grp">${canDelete?`<button type="button" class="btn danger" data-act="delete-rec">Delete</button>`:""}${extra}</div><div class="grp"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">${id?"Save changes":"Create "+F.title}</button></div></div></form>`);
-  markSheetClean();
+  markSheetClean(); paintSplitTotal();
   if(id) loadHistory(col,id);
   return true;
 }
@@ -822,6 +830,7 @@ function readForm(form){
     const t=el.dataset.type;
     out[el.name]=(t==="client"||t==="project"||t==="person")?(el.value?Number(el.value):null):el.type==="number"?(el.value===""?null:num(el.value)):el.value.trim();
   }
+  if(form.querySelector("[data-split]")) out.split=readSplit(form);
   return out;
 }
 
@@ -904,7 +913,7 @@ function drawDocEditor(){
     if(isQ&&d.invoice_id&&byId("invoices",d.invoice_id)) actions.push(`<button type="button" class="btn" data-open="invoices:${d.invoice_id}">View invoice</button>`);
     actions.push(`<button type="button" class="btn" data-act="print-doc">Print / PDF</button><button type="button" class="btn" data-act="download-doc">Download</button>`);
   }
-  const PAY=["p-date","p-amount","p-method","p-ref","p-note"], keep={};
+  const PAY=["p-date","p-amount","p-method","p-ref","p-note","p-received-by"], keep={};
   if(!S.sheet.payReset) for(const id of PAY){ const el=document.getElementById(id); if(el) keep[id]=el.value; }
   const keepShow=!S.sheet.payReset&&$("#p-show-balance")?.checked;
   S.sheet.payReset=false;
@@ -923,8 +932,8 @@ function totalsHtml(d){
 function paymentsHtml(d){
   const t=totals(d);
   return `<h3 class="sub-head">Payments</h3>
-  ${d.payments.length?`<div class="table-wrap"><table class="items"><thead><tr><th>Receipt</th><th>Date</th><th>Method</th><th>Reference</th><th>Recorded by</th><th class="r">Amount</th><th></th></tr></thead><tbody>${d.payments.map((p,i)=>`<tr><td class="pay-rcpt">${esc(p.receipt_no||"—")}</td><td>${fmtDate(p.date)}</td><td>${esc(p.method)}</td><td>${esc(p.ref||"")}</td><td>${esc(userName(p.by))}</td><td class="r num">${money(p.amount)}</td><td style="white-space:nowrap"><button type="button" class="btn sm" data-receipt="${i}">Receipt</button> <button type="button" class="btn ghost sm" data-del-pay="${i}" aria-label="Remove payment">✕</button></td></tr>`).join("")}</tbody></table></div>`:`<p class="hint">No payments recorded.</p>`}
-  ${t.balance>0?`<div class="form" style="margin-top:10px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))"><div class="field"><label for="p-date">Date</label><input class="input" type="date" id="p-date" value="${todayISO()}"></div><div class="field"><label for="p-amount">Amount</label><input class="input num" type="number" step="any" id="p-amount" value="${t.balance.toFixed(2)}"></div><div class="field"><label for="p-method">Method</label><select class="input" id="p-method">${PAY_METHODS.map(m=>`<option>${m}</option>`).join("")}</select></div><div class="field"><label for="p-ref">Reference</label><input class="input" id="p-ref" placeholder="UTR, cheque or transaction no."></div><div class="field" style="grid-column:1/-1"><label for="p-note">Note on receipt</label><input class="input" id="p-note" placeholder="Optional, e.g. advance payment, cheque from HDFC Bank"></div><label class="check-line" style="grid-column:1/-1"><input type="checkbox" id="p-show-balance"> Show invoice total and balance due on the receipt</label></div><button type="button" class="btn sm" data-act="add-payment" style="margin-top:8px">Record payment</button>`:""}`;
+  ${d.payments.length?`<div class="table-wrap"><table class="items"><thead><tr><th>Receipt</th><th>Date</th><th>Received by</th><th>Method</th><th>Reference</th><th>Recorded by</th><th class="r">Amount</th><th></th></tr></thead><tbody>${d.payments.map((p,i)=>`<tr><td class="pay-rcpt">${esc(p.receipt_no||"—")}</td><td>${fmtDate(p.date)}</td><td>${esc(partyName(partyKey(p.received_by)))}</td><td>${esc(p.method)}</td><td>${esc(p.ref||"")}</td><td>${esc(userName(p.by))}</td><td class="r num">${money(p.amount)}</td><td style="white-space:nowrap"><button type="button" class="btn sm" data-receipt="${i}">Receipt</button> <button type="button" class="btn ghost sm" data-del-pay="${i}" aria-label="Remove payment">✕</button></td></tr>`).join("")}</tbody></table></div>`:`<p class="hint">No payments recorded.</p>`}
+  ${t.balance>0?`<div class="form" style="margin-top:10px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))"><div class="field"><label for="p-date">Date</label><input class="input" type="date" id="p-date" value="${todayISO()}"></div><div class="field"><label for="p-amount">Amount</label><input class="input num" type="number" step="any" id="p-amount" value="${t.balance.toFixed(2)}"></div><div class="field"><label for="p-method">Method</label><select class="input" id="p-method">${PAY_METHODS.map(m=>`<option>${m}</option>`).join("")}</select></div><div class="field"><label for="p-received-by">Received by</label><select class="input" id="p-received-by"><option value="company">${esc(fundLabel())}</option>${moneyPeople().map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></div><div class="field"><label for="p-ref">Reference</label><input class="input" id="p-ref" placeholder="UTR, cheque or transaction no."></div><div class="field" style="grid-column:1/-1"><label for="p-note">Note on receipt</label><input class="input" id="p-note" placeholder="Optional, e.g. advance payment, cheque from HDFC Bank"></div><label class="check-line" style="grid-column:1/-1"><input type="checkbox" id="p-show-balance"> Show invoice total and balance due on the receipt</label></div><button type="button" class="btn sm" data-act="add-payment" style="margin-top:8px">Record payment</button>`:""}`;
 }
 // The company's saved document layout (Settings → Documents), or the unsaved draft while editing it.
 const savedLayout = () => ({...DocTemplates.LAYOUT_DEFAULTS,...(S.settings.docLayout||{})});
@@ -983,7 +992,8 @@ function exportCsv(col){
   const defs={
     leads:[["Name","name"],["Company","company"],["Email","email"],["Phone","phone"],["Region","region"],["Reference","ref"],["Stage","stage"],["Source","source"],["Value","value"],["Owner",r=>r.owner_id?userName(r.owner_id):""],["Added by",r=>userName(r.created_by)],["Added on","created_at"],["Next follow-up","next_follow_up"],["Notes","notes"]],
     clients:[["Company","company"],["Contact","name"],["Email","email"],["Phone","phone"],["Region","region"],["Reference","ref"],["Address","address"],["Tax no.","tax_id"],["Website","website"],["Added by",r=>userName(r.created_by)]],
-    expenses:[["Date","date"],["Description","description"],["Category","category"],["Amount","amount"],["Paid to","vendor"],["Payment method","payment_method"],["Paid by",r=>r.paid_by?userName(r.paid_by):""],["Project",r=>projectName(r.project_id)],["Notes","notes"],["Added by",r=>userName(r.created_by)]],
+    expenses:[["Date","date"],["Description","description"],["Category","category"],["Amount","amount"],["Paid to","vendor"],["Payment method","payment_method"],["Paid from",r=>r.paid_from==="personal"?"Own pocket":"Company money"],["Paid by",r=>r.paid_by?userName(r.paid_by):""],["Project",r=>projectName(r.project_id)],["Notes","notes"],["Added by",r=>userName(r.created_by)]],
+    settlements:[["Date","date"],["From",r=>partyName(partyKey(r.from_party))],["To",r=>partyName(partyKey(r.to_party))],["Amount","amount"],["Method","method"],["Note","note"]],
     projects:[["Project","name"],["Client",r=>clientName(r.client_id)],["Status","status"],["Region","region"],["Start","start_date"],["Due","due_date"],["Budget","budget"]],
     quotes:[["Number","number"],["Client",r=>clientName(r.client_id)],["Reference","ref"],["Date","date"],["Valid until","valid_until"],["Status",quoteStatus],["Total",r=>totals(r).total.toFixed(2)]],
     invoices:[["Number","number"],["Client",r=>clientName(r.client_id)],["Reference","ref"],["Date","date"],["Due","due_date"],["Status",invoiceStatus],["Total",r=>totals(r).total.toFixed(2)],["Paid",r=>totals(r).paid.toFixed(2)],["Balance",r=>totals(r).balance.toFixed(2)]]
@@ -1032,6 +1042,7 @@ async function handleClick(e,el){
       const rec=await update("invoices",S.sheet.id,{payments:S.sheet.doc.payments,_activity:`Issued receipts for ${S.sheet.doc.number}`}); if(!rec) return;
       S.sheet.doc=JSON.parse(JSON.stringify(rec)); markSheetClean(); p=rec.payments[+el.dataset.receipt]; }
     return navigate({...currentRoute(),receipt:p.receipt_no}); }
+  if(el.dataset.tabTo) return navigate({view:"settings",tab:el.dataset.tabTo});
   if(el.dataset.go) return go(el.dataset.go);
   if(el.dataset.goDetail){ const [v,id]=el.dataset.goDetail.split(":"); return go(v,Number(id)); }
   if(el.dataset.open){ const [c,id]=el.dataset.open.split(":"); return openRecord(c,Number(id)); }
@@ -1082,6 +1093,12 @@ async function handleClick(e,el){
   if(a==="doc-print"){ await flushDoc(); document.body.classList.add("printing-doc"); setTimeout(()=>{ window.print(); document.body.classList.remove("printing-doc"); },50); return; }
   if(a==="doc-theirs"){ const P=S.docPage; P.editor.commands.setContent(P.theirs.content,{emitUpdate:false}); P.doc={...P.doc,...P.theirs}; P.version=P.theirs.version; $("#doc-title").value=P.theirs.title||""; P.status="saved"; $("#doc-conflict").innerHTML=""; paintDocChrome(); return toast("Loaded the latest version"); }
   if(a==="doc-mine"){ const P=S.docPage; $("#doc-conflict").innerHTML=""; P.status="dirty"; await saveDoc({force:true}); return toast("Your version is saved"); }
+  if(a==="new-settlement") return openRecord("settlements",null,{});
+  if(a==="settle") return openRecord("settlements",null,{from_party:el.dataset.from,to_party:el.dataset.to,amount:num(el.dataset.amt)});
+  if(a==="role-add"){ const R=rolesDraft(); R.splice(R.length-1,0,{key:"share"+Date.now().toString(36),label:"New share",pct:0,user_id:null}); return render(); }
+  if(a==="role-remove"){ rolesDraft().splice(+el.dataset.i,1); return render(); }
+  if(a==="reset-roles"){ S.rolesDraft=JSON.parse(JSON.stringify(DEFAULT_ROLES)); return render(); }
+  if(a==="save-roles"){ try{ S.settings=await api("PUT","/api/settings",{moneyRoles:rolesDraft(),moneyKeeper:$("#m-keeper").value?Number($("#m-keeper").value):null}); S.rolesDraft=null; render(); toast("Money split saved"); }catch(err){ toast(err.message); } return; }
   if(a==="refresh"){ try{ await loadAll(); toast("Up to date"); }catch(err){ toast(err.message); } return; }
   if(a==="logout"){ try{ await api("POST","/api/logout"); }catch(_){} location.reload(); return; }
   if(a==="new-lead") return openRecord("leads");
@@ -1106,7 +1123,7 @@ async function handleClick(e,el){
       if(!id) navigate(currentRoute(),{replace:true,force:true}); } return; }
   if(a==="delete-doc"){ const {col,id}=S.sheet; if(await confirmBox(`Delete ${S.sheet.doc.number}?`,"This removes it for everyone and cannot be undone.")){ if(await remove(col,id)){ closeSheetNav({force:true}); toast("Deleted"); } } return; }
   if(a==="add-payment"){ const amt=num($("#p-amount").value); if(amt<=0){ toast("Enter a payment amount."); return; }
-    const d=S.sheet.doc; d.payments=[...d.payments,{date:$("#p-date").value||todayISO(),amount:amt,method:$("#p-method").value,ref:$("#p-ref").value.trim(),note:($("#p-note")?.value||"").trim(),show_balance:!!$("#p-show-balance")?.checked,by:S.me.id}];
+    const d=S.sheet.doc; d.payments=[...d.payments,{date:$("#p-date").value||todayISO(),amount:amt,method:$("#p-method").value,ref:$("#p-ref").value.trim(),note:($("#p-note")?.value||"").trim(),show_balance:!!$("#p-show-balance")?.checked,received_by:$("#p-received-by")?.value||"company",by:S.me.id}];
     if(d.status==="Draft") d.status="Sent";
     const rec=await update("invoices",S.sheet.id,{...docBody(d),_activity:`Recorded payment of ${money(amt)} on ${d.number}`});
     if(rec){ S.sheet.doc=JSON.parse(JSON.stringify(rec)); S.sheet.payReset=true; drawDocEditor(); markSheetClean();
@@ -1139,7 +1156,17 @@ function busyWhile(btn,p){
   p.then(end,end);
 }
 
+function rolesInput(el){
+  const r=rolesDraft()[+el.dataset.role]; if(!r) return;
+  if(el.dataset.rf==="pct") r.pct=el.value===""?0:num(el.value); else if(el.dataset.rf==="user_id") r.user_id=el.value?Number(el.value):null; else r.label=el.value;
+  const R=rolesDraft(), total=r2(R.reduce((a,x)=>a+num(x.pct),0)), ok=Math.abs(total-100)<0.01;
+  $("#roles-total").innerHTML=ok?`<span class="settled">Total ${total}%</span>`:`<span class="owes">Total ${total}%. Must be 100%.</span>`;
+  const b=$('[data-act="save-roles"]'); if(b) b.disabled=!ok;
+}
+document.addEventListener("input",e=>{ if(e.target.dataset?.role!=null) rolesInput(e.target); if(e.target.dataset?.splitKey) paintSplitTotal(); });
+document.addEventListener("change",e=>{ if(e.target.dataset?.role!=null) rolesInput(e.target); if(e.target.dataset?.splitKey) paintSplitTotal(); });
 function trackDirty(el){
+  if(el.dataset.role!=null||el.id==="m-keeper") return; // the roles editor keeps its own draft
   if(el.dataset.l||el.dataset.lPick) return; // layout editor keeps its own draft
   if(el.id&&el.type!=="file"&&el.dataset.search==null&&!["tenant-switch","lead-region","task-filter","exp-month","exp-cat","doc-filter","doc-title","ed-block"].includes(el.id)&&$("#main")?.contains(el)) S.dirty[el.id]=el.value;
 }
@@ -1210,6 +1237,7 @@ async function handleSubmit(e){
   if(form.id==="rec-form"){
     const {col,id}=S.sheet; const vals=readForm(form);
     const req=FORMS[col].fields.find(f=>f[3]?.req&&!vals[f[0]]); if(req){ toast(`${req[1]} is required.`); $("#f-"+req[0])?.focus(); return; }
+    if(col==="projects"&&$("#split-total")?.dataset.ok==="false"){ toast("The money split must total 100%."); return; }
     const rec=id?await update(col,id,vals):await create(col,vals);
     if(rec){ closeSheetNav({force:true}); toast(id?"Saved":"Created"); }
   }
@@ -1236,7 +1264,7 @@ async function handleSubmit(e){
 
 async function switchTenant(id){
   if(sheetIsDirty()&&!await confirmDiscard()){ render(); return; }
-  try{ await api("POST","/api/admin/switch",{tenant_id:id}); S.layoutDraft=null; S.leadRegion=""; await loadAll();
+  try{ await api("POST","/api/admin/switch",{tenant_id:id}); S.layoutDraft=null; S.rolesDraft=null; S.leadRegion=""; await loadAll();
     await navigate({view:S.view==="settings"?"settings":"overview",tab:S.settingsTab},{force:true}); toast(`Now working in ${S.tenant?.name||"that company"}`); }
   catch(err){ toast(err.message); }
 }
@@ -1474,6 +1502,141 @@ async function openBell(btn){
   setTimeout(()=>document.addEventListener("mousedown",outside),0);
 }
 setInterval(()=>{ if(S.ready&&document.visibilityState==="visible") refreshUnread(); },60000);
+
+/* ---------- money: who earns what, who holds it, who owes whom ----------
+ * Every payment received on an invoice is divided by the split (Settings → Money; a project can change
+ * people or percentages). Each payment records who took the money: the company fund or a person.
+ * Expenses come out of the company's share; one paid from someone's own pocket is owed back to them.
+ * Settlements record money handed from one party to another.
+ * For each party: position = cash they hold − what they are entitled to.
+ *   above zero → they hold money that belongs to others (they owe);  below zero → they are owed. */
+const DEFAULT_ROLES=[{key:"partner1",label:"Partner 1",pct:10,user_id:null},{key:"partner2",label:"Partner 2",pct:10,user_id:null},{key:"partner3",label:"Partner 3",pct:10,user_id:null},
+  {key:"developer",label:"Developer",pct:20,user_id:null},{key:"lead",label:"Lead",pct:10,user_id:null},{key:"company",label:"Company",pct:40,company:true}];
+const moneyRoles=()=>(S.settings.moneyRoles?.length?S.settings.moneyRoles:DEFAULT_ROLES);
+const keeperId=()=>S.settings.moneyKeeper||null;
+const partyKey=v=>v==null||v===""||v==="company"?"company":"u"+Number(v);
+const partyValue=k=>k==="company"?"company":k.slice(1);
+const fundLabel=()=>`Company fund${keeperId()?` (kept by ${userName(keeperId())})`:""}`;
+const partyName=k=>k==="company"?fundLabel():userName(Number(k.slice(1)));
+const r2=x=>Math.round((x+Number.EPSILON)*100)/100;
+// The split that applies to a project: company defaults, then the project's own changes.
+// The Lead share goes to the project lead unless the project names someone else.
+function projectSplit(p){
+  const ov=new Map((p?.split||[]).map(o=>[o.key,o]));
+  return moneyRoles().map(r=>{ const o=ov.get(r.key)||{};
+    const user=r.company?null:(o.user_id||(r.key==="lead"&&p?.owner_id?p.owner_id:null)||r.user_id||null);
+    return {...r,pct:o.pct!=null?num(o.pct):num(r.pct),user_id:user,changed:o.pct!=null||!!o.user_id}; });
+}
+const splitTotal=split=>r2(split.reduce((a,r)=>a+num(r.pct),0));
+// people a share can go to: active members of this company (and the super admin)
+const moneyPeople=()=>S.users.filter(u=>u.active!==false);
+function ledger(){
+  const parties=new Map(), byProject=new Map();
+  const P=k=>{ if(!parties.has(k)) parties.set(k,{key:k,earned:0,borne:0,received:0,spent:0,sent:0,got:0}); return parties.get(k); };
+  const shareTo=r=>r.company||!r.user_id||!S.users.some(u=>u.id===r.user_id)?"company":"u"+r.user_id; // unassigned shares stay with the company
+  P("company");
+  for(const inv of S.data.invoices){
+    if(inv.status==="Void") continue;
+    const proj=byId("projects",inv.project_id), split=projectSplit(proj), pk=proj?proj.id:0;
+    const row=byProject.get(pk)||{project:proj,received:0,shares:new Map(),split}; byProject.set(pk,row);
+    for(const pay of inv.payments||[]){
+      const amt=num(pay.amount); if(!amt) continue;
+      const who=partyKey(pay.received_by); P(who).received+=amt; row.received+=amt;
+      for(const r of split){ const v=amt*num(r.pct)/100, k=shareTo(r); P(k).earned+=v; row.shares.set(r.key,(row.shares.get(r.key)||0)+v); }
+    }
+  }
+  for(const e of S.data.expenses){
+    const amt=num(e.amount); if(!amt) continue;
+    P("company").borne+=amt;
+    const payer=e.paid_from==="personal"&&e.paid_by?partyKey(e.paid_by):"company";
+    P(payer).spent+=amt;
+  }
+  for(const s of S.data.settlements||[]){ const amt=num(s.amount); if(!amt) continue; P(partyKey(s.from_party)).sent+=amt; P(partyKey(s.to_party)).got+=amt; }
+  for(const p of parties.values()){
+    p.held=r2(p.received-p.spent-p.sent+p.got); p.entitled=r2(p.earned-p.borne); p.position=r2(p.held-p.entitled);
+  }
+  // fewest transfers: whoever holds others' money pays whoever is owed
+  const owe=[...parties.values()].filter(p=>p.position>0.009).map(p=>({k:p.key,v:p.position})).sort((a,b)=>b.v-a.v);
+  const owed=[...parties.values()].filter(p=>p.position<-0.009).map(p=>({k:p.key,v:-p.position})).sort((a,b)=>b.v-a.v);
+  const transfers=[]; let i=0,j=0;
+  while(i<owe.length&&j<owed.length){ const v=r2(Math.min(owe[i].v,owed[j].v)); if(v>0.009) transfers.push({from:owe[i].k,to:owed[j].k,amount:v});
+    owe[i].v=r2(owe[i].v-v); owed[j].v=r2(owed[j].v-v); if(owe[i].v<=0.009) i++; if(owed[j].v<=0.009) j++; }
+  const list=[...parties.values()].sort((a,b)=>(a.key==="company"?-1:b.key==="company"?1:partyName(a.key).localeCompare(partyName(b.key))));
+  return {parties:list,company:parties.get("company"),transfers,byProject:[...byProject.values()].sort((a,b)=>b.received-a.received)};
+}
+const positionText=p=>p.position>0.009?`<span class="owes">Owes ${money(p.position)}</span>`:p.position<-0.009?`<span class="owed">Is owed ${money(-p.position)}</span>`:`<span class="settled">Settled</span>`;
+
+function viewMoney(){
+  const L=ledger(), c=L.company, roles=moneyRoles();
+  const received=L.parties.reduce((a,p)=>a+p.received,0), spent=c.borne;
+  let h=head("Money",`How money received is divided, who holds it, and who owes whom. Split: ${roles.map(r=>`${esc(r.label)} ${num(r.pct)}%`).join(" · ")}${isAdmin()?` · <a href="/settings/money" data-go="settings" data-tab-to="money">Change</a>`:""}`,
+    `<button class="btn" data-act="csv-settlements">Export settlements</button>${addBtn("Record settlement","new-settlement")}`);
+  const unassigned=L.byProject.filter(r=>r.received>0&&r.split.some(x=>!x.company&&!x.user_id));
+  if(unassigned.length) h+=`<div class="money-warn" role="note"><b>Some shares have no person yet</b>, so they are counted with the company for now: ${unassigned.map(r=>`${r.project?`<a href="/projects/${r.project.id}" data-go-detail="project:${r.project.id}">${esc(r.project.name)}</a>`:"invoices without a project"} (${r.split.filter(x=>!x.company&&!x.user_id).map(x=>esc(x.label)).join(", ")})`).join("; ")}. ${isAdmin()?"Set them in Settings → Money or on each project.":""}</div>`;
+  h+=`<div class="kpis">
+    <div class="panel kpi"><div class="label">Received from clients</div><div class="value">${money(received)}</div><div class="sub">All payments on invoices</div></div>
+    <div class="panel kpi"><div class="label">Company fund on hand</div><div class="value">${money(c.held)}</div><div class="sub">${keeperId()?"Kept by "+esc(userName(keeperId())):isAdmin()?`<a href="/settings/money" data-go="settings" data-tab-to="money">Choose who keeps it</a>`:"No keeper set"}</div></div>
+    <div class="panel kpi"><div class="label">Company's share</div><div class="value">${money(c.entitled)}</div><div class="sub">${money(c.earned)} earned − ${money(spent)} expenses</div></div>
+    <div class="panel kpi"><div class="label">Still to settle</div><div class="value">${money(L.transfers.reduce((a,t)=>a+t.amount,0))}</div><div class="sub">${L.transfers.length?`${L.transfers.length} transfer${L.transfers.length===1?"":"s"} below`:"Everyone is settled"}</div></div>
+  </div><div class="grid2">`;
+  h+=`<section class="panel"><h2>Who owes whom</h2>${L.transfers.length?`<ul class="list-plain transfers">${L.transfers.map(t=>`<li><span><b>${esc(partyName(t.from))}</b> <span class="arrow">→</span> <b>${esc(partyName(t.to))}</b><br><span class="cell-sub">${t.to==="company"?"hand over the company's money":t.from==="company"?"pay out their share from the fund":"pass on what's due"}</span></span><span class="meta"><span class="num amt">${money(t.amount)}</span><button type="button" class="btn sm" data-act="settle" data-from="${partyValue(t.from)}" data-to="${partyValue(t.to)}" data-amt="${t.amount}">Record</button></span></li>`).join("")}</ul>`:`<div class="empty">Everyone is settled up.</div>`}</section>`;
+  h+=`<section class="panel"><h2>How the fund moved</h2><div class="fund-flow">${[["Received into the fund",c.received],["Received from others",c.got],["Expenses paid from the fund",-c.spent],["Paid out to people",-c.sent]].map(([k,v])=>`<div><span>${k}</span><span class="num ${v<0?"neg":""}">${v<0?"−":""}${money(Math.abs(v))}</span></div>`).join("")}<div class="tot"><span>On hand</span><span class="num">${money(c.held)}</span></div></div></section></div>`;
+  h+=`<h3 class="sub-head">Each person's position</h3><div class="panel table-wrap"><table class="money-table"><thead><tr><th>Who</th><th>Position</th><th class="r">Holds now</th><th class="r">Share earned</th><th class="r">Expenses borne</th><th class="r">Took from clients</th><th class="r">Spent for company</th><th class="r">Handed over</th><th class="r">Received</th></tr></thead><tbody>${L.parties.map(p=>`<tr><td class="cell-main">${esc(partyName(p.key))}</td><td>${positionText(p)}</td><td class="r num">${money(p.held)}</td><td class="r num">${money(p.earned)}</td><td class="r num">${p.borne?"−"+money(p.borne):"—"}</td><td class="r num">${p.received?money(p.received):"—"}</td><td class="r num">${p.spent?money(p.spent):"—"}</td><td class="r num">${p.sent?money(p.sent):"—"}</td><td class="r num">${p.got?money(p.got):"—"}</td></tr>`).join("")}</tbody></table></div>
+  <p class="hint money-explain"><b>Position</b> = what someone holds now − what they're entitled to (their share, minus expenses for the company). "Owes" means they hold money that belongs to others; "Is owed" means others hold their money. Expenses paid from someone's own pocket are owed back to them.</p>`;
+  const projRows=L.byProject.filter(r=>r.received>0);
+  h+=`<h3 class="sub-head">By project</h3>${projRows.length?`<div class="panel table-wrap"><table class="money-table"><thead><tr><th>Project</th><th class="r">Received</th>${roles.map(r=>`<th class="r">${esc(r.label)}</th>`).join("")}</tr></thead><tbody>${projRows.map(r=>`<tr ${r.project?`data-go-detail="project:${r.project.id}"`:""}><td class="cell-main">${r.project?esc(r.project.name):'<span class="cell-sub">No project</span>'}</td><td class="r num">${money(r.received)}</td>${r.split.map(x=>`<td class="r"><div class="num">${money(r.shares.get(x.key)||0)}</div><div class="cell-sub">${num(x.pct)}% · ${x.company?"Company":x.user_id?esc(userName(x.user_id)):'<span class="unset">not set</span>'}</div></td>`).join("")}</tr>`).join("")}</tbody></table></div>`:`<div class="panel"><div class="empty">No payments received yet. Record payments on invoices to see the split.</div></div>`}`;
+  const st=[...(S.data.settlements||[])].sort((a,b)=>(b.date||"").localeCompare(a.date||"")||b.id-a.id);
+  h+=`<h3 class="sub-head">Settlements</h3>${st.length?`<div class="panel table-wrap"><table><thead><tr><th>Date</th><th>From</th><th>To</th><th>Method</th><th>Note</th><th class="r">Amount</th></tr></thead><tbody>${st.map(s=>`<tr data-open="settlements:${s.id}"><td>${fmtDate(s.date)}</td><td>${esc(partyName(partyKey(s.from_party)))}</td><td>${esc(partyName(partyKey(s.to_party)))}</td><td>${esc(s.method||"—")}</td><td>${esc(s.note||"")}</td><td class="r num">${money(s.amount)}</td></tr>`).join("")}</tbody></table></div>`:`<div class="panel"><div class="empty">No settlements yet. When someone hands money to the company fund or pays out a share, record it here.</div></div>`}`;
+  return h;
+}
+
+// a project's split: who gets which share (editable by administrators)
+function splitEditorHtml(rec){
+  const split=projectSplit(rec), can=isAdmin(), ppl=moneyPeople();
+  const ov=new Map((rec.split||[]).map(o=>[o.key,o]));
+  return `<h3 class="sub-head">Money split</h3><div class="split-edit" data-split>
+    <p class="hint">${can?"Change who gets each share, or the percentage, for this project only. Empty means the company default.":"Set by administrators."} The Lead share goes to the project lead unless you choose someone else.</p>
+    <table class="items"><thead><tr><th>Share</th><th>Person</th><th class="r">%</th></tr></thead><tbody>${split.map(r=>{ const o=ov.get(r.key)||{};
+      return `<tr><td>${esc(r.label)}</td><td>${r.company?`<span class="cell-sub">${esc(fundLabel())}</span>`:`<select class="input" data-split-key="${esc(r.key)}" data-split-f="user" ${can?"":"disabled"} aria-label="${esc(r.label)}"><option value="">Default${(()=>{ const d=r.key==="lead"&&rec.owner_id?rec.owner_id:moneyRoles().find(x=>x.key===r.key)?.user_id; return d?` (${esc(userName(d))})`:" (not set)"; })()}</option>${ppl.map(u=>`<option value="${u.id}" ${o.user_id===u.id?"selected":""}>${esc(u.name)}</option>`).join("")}</select>`}</td>
+      <td class="r"><input class="input num pct" type="number" min="0" max="100" step="0.5" data-split-key="${esc(r.key)}" data-split-f="pct" value="${o.pct!=null?esc(o.pct):""}" placeholder="${num(moneyRoles().find(x=>x.key===r.key)?.pct)}" ${can?"":"disabled"} aria-label="${esc(r.label)} percentage"></td></tr>`; }).join("")}</tbody></table>
+    <div class="split-total" id="split-total"></div></div>`;
+}
+function readSplit(form){
+  const by=new Map();
+  form.querySelectorAll("[data-split-key]").forEach(el=>{ const k=el.dataset.splitKey, o=by.get(k)||{key:k}; if(el.dataset.splitF==="user"&&el.value) o.user_id=Number(el.value); if(el.dataset.splitF==="pct"&&el.value!=="") o.pct=num(el.value); by.set(k,o); });
+  return [...by.values()].filter(o=>o.user_id||o.pct!=null);
+}
+function paintSplitTotal(){
+  const box=$("#split-total"), form=$("#rec-form"); if(!box||!form) return;
+  const ov=new Map(readSplit(form).map(o=>[o.key,o])), total=r2(moneyRoles().reduce((a,r)=>a+(ov.get(r.key)?.pct??num(r.pct)),0));
+  box.innerHTML=Math.abs(total-100)<0.01?`<span class="settled">Total ${total}%</span>`:`<span class="owes">Total ${total}%. Make it 100% before saving.</span>`;
+  box.dataset.ok=String(Math.abs(total-100)<0.01);
+}
+// split + amounts on the project page
+function projectMoneyPanel(p){
+  const split=projectSplit(p), got=S.data.invoices.filter(i=>i.project_id===p.id&&i.status!=="Void").reduce((a,i)=>a+(i.payments||[]).reduce((s,x)=>s+num(x.amount),0),0);
+  return `<section class="panel"><h2>Money split</h2><div class="split-view">${split.map(r=>`<div><span>${esc(r.label)} <span class="cell-sub">${num(r.pct)}%</span></span><span>${r.company?"Company":r.user_id?esc(userName(r.user_id)):'<span class="unset">not set</span>'}</span><span class="num">${money(got*num(r.pct)/100)}</span></div>`).join("")}<div class="tot"><span>Received so far</span><span></span><span class="num">${money(got)}</span></div></div>
+    ${isAdmin()?`<div style="padding:0 18px 16px"><button type="button" class="btn sm" data-open="projects:${p.id}">Change split</button> <a class="btn sm ghost" href="/money" data-go="money">Open Money</a></div>`:""}</section>`;
+}
+
+// Settings → Money: the default split and who keeps the company fund
+const rolesDraft=()=>(S.rolesDraft??=JSON.parse(JSON.stringify(moneyRoles())));
+function moneySettingsHtml(){
+  const R=rolesDraft(), total=r2(R.reduce((a,r)=>a+num(r.pct),0)), ok=Math.abs(total-100)<0.01, ppl=moneyPeople();
+  return `<div class="panel" style="padding:18px;max-width:860px">
+    <h3 class="sub-head" style="margin-top:0">How money received is divided</h3>
+    <p class="hint">Every payment received on an invoice is split by these percentages. They must total 100%. People set here are the default for every project; each project can change them. Leave Developer and Lead empty to choose them per project (Lead defaults to the project lead).</p>
+    <table class="items roles-table"><thead><tr><th>Share</th><th>Default person</th><th class="r">%</th><th></th></tr></thead><tbody>${R.map((r,i)=>`<tr>
+      <td><input class="input" data-role="${i}" data-rf="label" value="${esc(r.label)}" aria-label="Share name" maxlength="40"></td>
+      <td>${r.company?`<span class="cell-sub">Company fund</span>`:`<select class="input" data-role="${i}" data-rf="user_id" aria-label="Default person"><option value="">Choose per project</option>${ppl.map(u=>`<option value="${u.id}" ${r.user_id===u.id?"selected":""}>${esc(u.name)}</option>`).join("")}</select>`}</td>
+      <td class="r"><input class="input num pct" type="number" min="0" max="100" step="0.5" data-role="${i}" data-rf="pct" value="${esc(r.pct)}" aria-label="Percentage"></td>
+      <td>${r.company?"":`<button type="button" class="btn ghost sm" data-act="role-remove" data-i="${i}" aria-label="Remove share">✕</button>`}</td></tr>`).join("")}</tbody></table>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px"><button type="button" class="btn sm" data-act="role-add">+ Add share</button><span id="roles-total">${ok?`<span class="settled">Total ${total}%</span>`:`<span class="owes">Total ${total}%. Must be 100%.</span>`}</span></div>
+    <h3 class="sub-head">Company fund</h3>
+    <div class="field" style="max-width:360px"><label for="m-keeper">Kept by</label><select class="input" id="m-keeper"><option value="">Not set</option>${ppl.map(u=>`<option value="${u.id}" ${S.settings.moneyKeeper===u.id?"selected":""}>${esc(u.name)}</option>`).join("")}</select><span class="hint">The person who looks after the company's money. Payments marked "Company fund" are with them.</span></div>
+    <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn primary" data-act="save-roles" ${ok?"":"disabled"}>Save</button><button type="button" class="btn" data-act="reset-roles">Back to 10 / 10 / 10 / 20 / 10 / 40</button></div>
+  </div>`;
+}
 
 start();
 })();
