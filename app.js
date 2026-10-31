@@ -44,7 +44,7 @@ const ENTITIES = {
   projects: {
     label: "project",
     fields: { name: "text", client_id: "num", status: "text", start_date: "text", due_date: "text",
-      budget: "num", owner_id: "num", description: "text", region: "text", split: "json" },
+      budget: "num", owner_id: "num", brought_by: "num", description: "text", region: "text", split: "json" },
     required: ["name"],
   },
   tasks: {
@@ -84,7 +84,7 @@ const ENTITIES = {
 };
 const SQL_TYPE = { text: "TEXT", num: "DOUBLE PRECISION", json: "JSONB" };
 // Link fields must point at a row in the same tenant.
-const LINKS = { client_id: "clients", project_id: "projects", owner_id: "users", assignee_id: "users", paid_by: "users",
+const LINKS = { client_id: "clients", project_id: "projects", owner_id: "users", assignee_id: "users", paid_by: "users", brought_by: "users",
   invoice_id: "invoices", from_quote: "quotes", from_lead: "leads" };
 
 const DEFAULT_SETTINGS = {
@@ -101,7 +101,7 @@ const DEFAULT_SETTINGS = {
     { key: "partner2", label: "Partner 2", pct: 10, user_id: null },
     { key: "partner3", label: "Partner 3", pct: 10, user_id: null },
     { key: "developer", label: "Developer", pct: 20, user_id: null },
-    { key: "lead", label: "Lead", pct: 10, user_id: null },
+    { key: "lead", label: "Lead (brought the project)", pct: 10, user_id: null },
     { key: "company", label: "Company", pct: 40, company: true },
   ],
   moneyKeeper: null, // who keeps the company fund
@@ -294,6 +294,9 @@ function cleanProjectSplit(json) {
 async function validateRecord(req, entity, values, before) {
   if (entity === "expenses" && "paid_from" in values) {
     values.paid_from = values.paid_from === "personal" ? "personal" : "company";
+  }
+  if (entity === "projects" && before && "brought_by" in values && req.user.role === "member" && (values.brought_by ?? null) !== (before.brought_by ?? null)) {
+    throw httpError(403, "Only administrators can change who brought in a project, because it decides who gets the Lead share.");
   }
   if (entity === "projects" && "split" in values) {
     values.split = cleanProjectSplit(values.split);

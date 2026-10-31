@@ -488,7 +488,7 @@ function viewProjects(){
   let h=head("Projects","Delivery work for your clients, with budgets, deadlines and task progress.",`${searchBox("projects")}<button class="btn" data-act="csv-projects">Export CSV</button>${addBtn("New project","new-project")}`);
   if(!S.data.projects.length) return h+`<div class="panel">${emptyState("No projects yet","Create a project for a client, then break it into tasks for your team.","Create a project","new-project")}</div>`;
   const t=todayISO();
-  h+=`<div class="panel table-wrap"><table><thead><tr><th>Project</th><th>Status</th><th>Lead</th><th>Due</th><th>Progress</th><th class="r">Budget</th></tr></thead><tbody>${rows.map(p=>{const pr=projProgress(p);const late=p.due_date&&p.due_date<t&&!["Completed","Cancelled"].includes(p.status);
+  h+=`<div class="panel table-wrap"><table><thead><tr><th>Project</th><th>Status</th><th>Handled by</th><th>Due</th><th>Progress</th><th class="r">Budget</th></tr></thead><tbody>${rows.map(p=>{const pr=projProgress(p);const late=p.due_date&&p.due_date<t&&!["Completed","Cancelled"].includes(p.status);
     return `<tr data-go-detail="project:${p.id}"><td><div class="cell-main">${esc(p.name)}</div><div class="cell-sub">${esc(clientName(p.client_id)||"Internal")}</div></td><td>${pill(p.status||"Planning")}</td><td>${esc(p.owner_id?userName(p.owner_id):"—")}</td><td style="${late?"color:var(--bad)":""}">${fmtDate(p.due_date)}</td><td><div style="display:flex;gap:8px;align-items:center"><div class="progress" style="flex:1"><i style="width:${pr.pct}%"></i></div><span class="cell-sub num">${pr.done}/${pr.n}</span></div></td><td class="r num">${p.budget?money(p.budget):"—"}</td></tr>`;}).join("")}</tbody></table></div>`;
   return h;
 }
@@ -499,7 +499,7 @@ function viewProject(){
   const spent=S.data.expenses.filter(e=>e.project_id===p.id).reduce((a,e)=>a+num(e.amount),0);
   const billed=S.data.invoices.filter(i=>i.project_id===p.id&&!["Draft","Void"].includes(i.status)).reduce((s,i)=>s+totals(i).total,0);
   let h=head(p.name,`<a class="btn ghost sm" href="/projects" data-go="projects">← All projects</a>`,`<button class="btn" data-open="projects:${p.id}">Edit</button><button class="btn" data-act="new-invoices" data-client="${p.client_id||""}" data-project="${p.id}">Invoice this project</button><button class="btn" data-act="new-expense">Add expense</button><button class="btn primary" data-act="new-task" data-project="${p.id}">Add task</button>`);
-  const cells=[["Client",p.client_id?`<a href="/clients/${p.client_id}" data-go-detail="client:${p.client_id}">${esc(clientName(p.client_id))}</a>`:"Internal"],["Status",pill(p.status||"Planning")],["Project lead",esc(p.owner_id?userName(p.owner_id):"—")],["Start",fmtDate(p.start_date)],["Due",fmtDate(p.due_date)],["Budget",`<span class="num">${p.budget?money(p.budget):"—"}</span>`],["Expenses",`<span class="num" style="${p.budget&&spent>p.budget?"color:var(--bad)":""}">${money(spent)}</span>${p.budget?` <span class="cell-sub">of ${money(p.budget)} budget</span>`:""}`],["Invoiced",`<span class="num">${money(billed)}</span>`],["Progress",`${pr.pct}% <span class="cell-sub">(${pr.done} of ${pr.n} tasks)</span>`]];
+  const cells=[["Client",p.client_id?`<a href="/clients/${p.client_id}" data-go-detail="client:${p.client_id}">${esc(clientName(p.client_id))}</a>`:"Internal"],["Status",pill(p.status||"Planning")],["Handled by",esc(p.owner_id?userName(p.owner_id):"—")],["Brought in by",p.brought_by?esc(userName(p.brought_by)):'<span class="unset">not set</span>'],["Start",fmtDate(p.start_date)],["Due",fmtDate(p.due_date)],["Budget",`<span class="num">${p.budget?money(p.budget):"—"}</span>`],["Expenses",`<span class="num" style="${p.budget&&spent>p.budget?"color:var(--bad)":""}">${money(spent)}</span>${p.budget?` <span class="cell-sub">of ${money(p.budget)} budget</span>`:""}`],["Invoiced",`<span class="num">${money(billed)}</span>`],["Progress",`${pr.pct}% <span class="cell-sub">(${pr.done} of ${pr.n} tasks)</span>`]];
   h+=`<div class="panel" style="margin-bottom:16px"><dl class="detail-grid">${cells.map(([k,v])=>`<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>${p.description?`<div style="padding:0 16px 16px;white-space:pre-wrap;color:var(--muted)">${esc(p.description)}</div>`:""}</div>`;
   h+=`<div class="grid2" style="margin-bottom:16px">${projectMoneyPanel(p)}<section class="panel linked-panel">${linkedDocsHtml("projects",p.id)}</section></div>`;
   return h+(tasks.length?taskBoard(tasks):`<div class="panel">${emptyState("No tasks in this project","Break the work into tasks and assign them to people on your team.","Add a task","new-task")}</div>`);
@@ -733,7 +733,7 @@ const FORMS = {
     ["address","Billing address","textarea",{full:1}],["tax_id","GSTIN / Tax no."],["website","Website"],["notes","Notes","textarea",{full:1}]]},
   projects:{title:"project",fields:[
     ["name","Project name","text",{req:1,full:1}],["client_id","Client","client"],["status","Status","select",{opts:()=>PROJECT_STATUS}],
-    ["start_date","Start date","date"],["due_date","Due date","date"],["budget","Budget","number"],["owner_id","Project lead","person"],
+    ["start_date","Start date","date"],["due_date","Due date","date"],["budget","Budget","number"],["owner_id","Handled by (project lead)","person"],["brought_by","Brought in by","person",{hint:"Gets the Lead share of the money"}],
     ["region","Region","region"],["description","Description","textarea",{full:1}]]},
   tasks:{title:"task",fields:[
     ["title","Task","text",{req:1,full:1}],["project_id","Project","project"],["status","Status","select",{opts:()=>TASK_STATUS}],
@@ -758,7 +758,7 @@ function options(list,v,blank){
 function fieldHtml([key,label,type="text",o={}],rec){
   const v=rec[key]??"", id="f-"+key, cls=o.full?"field full":"field";
   const lab=`<label for="${id}">${esc(label)}${o.req?' <span class="req">*</span>':""}</label>`;
-  const sel=inner=>`<div class="${cls}">${lab}<select class="input" id="${id}" name="${key}" data-type="${type}">${inner}</select></div>`;
+  const sel=inner=>`<div class="${cls}">${lab}<select class="input" id="${id}" name="${key}" data-type="${type}">${inner}</select>${o.hint?`<span class="hint">${esc(o.hint)}</span>`:""}</div>`;
   if(type==="select") return sel(options(o.opts(),v));
   if(type==="region") return `<div class="${cls}">${lab}<input class="input" id="${id}" name="${key}" data-type="${type}" list="${id}-list" value="${esc(v)}" placeholder="Pick or type a region" autocomplete="off"><datalist id="${id}-list">${(S.settings.regions||[]).map(r=>`<option value="${esc(r)}">`).join("")}</datalist></div>`;
   if(type==="client") return sel(`<option value="">— None —</option>`+[...S.data.clients].sort((a,b)=>(a.company||a.name).localeCompare(b.company||b.name)).map(c=>`<option value="${c.id}" ${c.id===v?"selected":""}>${esc(c.company||c.name)}</option>`).join(""));
@@ -1104,7 +1104,8 @@ async function handleClick(e,el){
   if(a==="new-lead") return openRecord("leads");
   if(a==="new-client") return openRecord("clients");
   if(a==="new-expense") return openRecord("expenses",null,S.view==="project"?{project_id:S.param}:{});
-  if(a==="new-project") return openRecord("projects",null,el.dataset.client?{client_id:Number(el.dataset.client)}:{});
+  if(a==="new-project"){ const c=el.dataset.client?byId("clients",el.dataset.client):null, ld=c?.from_lead?byId("leads",c.from_lead):null;
+    return openRecord("projects",null,c?{client_id:c.id,...(ld?{brought_by:ld.owner_id||ld.created_by||null}:{})}:{}); }
   if(a==="new-task") return openRecord("tasks",null,{project_id:Number(el.dataset.project)||(S.view==="project"?S.param:null)});
   if(a==="new-quotes"||a==="new-invoices"){ const col=a.slice(4); if(!S.data.clients.length){ toast("Add a client first."); return openRecord("clients"); }
     return openRecord(col,null,{client_id:Number(el.dataset.client)||null,project_id:Number(el.dataset.project)||null}); }
@@ -1520,11 +1521,11 @@ const fundLabel=()=>`Company fund${keeperId()?` (kept by ${userName(keeperId())}
 const partyName=k=>k==="company"?fundLabel():userName(Number(k.slice(1)));
 const r2=x=>Math.round((x+Number.EPSILON)*100)/100;
 // The split that applies to a project: company defaults, then the project's own changes.
-// The Lead share goes to the project lead unless the project names someone else.
+// The Lead share goes to whoever brought the project in, unless the project names someone else.
 function projectSplit(p){
   const ov=new Map((p?.split||[]).map(o=>[o.key,o]));
   return moneyRoles().map(r=>{ const o=ov.get(r.key)||{};
-    const user=r.company?null:(o.user_id||(r.key==="lead"&&p?.owner_id?p.owner_id:null)||r.user_id||null);
+    const user=r.company?null:(o.user_id||(r.key==="lead"&&p?.brought_by?p.brought_by:null)||r.user_id||null);
     return {...r,pct:o.pct!=null?num(o.pct):num(r.pct),user_id:user,changed:o.pct!=null||!!o.user_id}; });
 }
 const splitTotal=split=>r2(split.reduce((a,r)=>a+num(r.pct),0));
@@ -1595,9 +1596,9 @@ function splitEditorHtml(rec){
   const split=projectSplit(rec), can=isAdmin(), ppl=moneyPeople();
   const ov=new Map((rec.split||[]).map(o=>[o.key,o]));
   return `<h3 class="sub-head">Money split</h3><div class="split-edit" data-split>
-    <p class="hint">${can?"Change who gets each share, or the percentage, for this project only. Empty means the company default.":"Set by administrators."} The Lead share goes to the project lead unless you choose someone else.</p>
+    <p class="hint">${can?"Change who gets each share, or the percentage, for this project only. Empty means the company default.":"Set by administrators."} The Lead share goes to whoever brought the project in (above) unless you choose someone else here.</p>
     <table class="items"><thead><tr><th>Share</th><th>Person</th><th class="r">%</th></tr></thead><tbody>${split.map(r=>{ const o=ov.get(r.key)||{};
-      return `<tr><td>${esc(r.label)}</td><td>${r.company?`<span class="cell-sub">${esc(fundLabel())}</span>`:`<select class="input" data-split-key="${esc(r.key)}" data-split-f="user" ${can?"":"disabled"} aria-label="${esc(r.label)}"><option value="">Default${(()=>{ const d=r.key==="lead"&&rec.owner_id?rec.owner_id:moneyRoles().find(x=>x.key===r.key)?.user_id; return d?` (${esc(userName(d))})`:" (not set)"; })()}</option>${ppl.map(u=>`<option value="${u.id}" ${o.user_id===u.id?"selected":""}>${esc(u.name)}</option>`).join("")}</select>`}</td>
+      return `<tr><td>${esc(r.label)}</td><td>${r.company?`<span class="cell-sub">${esc(fundLabel())}</span>`:`<select class="input" data-split-key="${esc(r.key)}" data-split-f="user" ${can?"":"disabled"} aria-label="${esc(r.label)}"><option value="">Default${(()=>{ const d=r.key==="lead"&&rec.brought_by?rec.brought_by:moneyRoles().find(x=>x.key===r.key)?.user_id; return d?` (${esc(userName(d))})`:" (not set)"; })()}</option>${ppl.map(u=>`<option value="${u.id}" ${o.user_id===u.id?"selected":""}>${esc(u.name)}</option>`).join("")}</select>`}</td>
       <td class="r"><input class="input num pct" type="number" min="0" max="100" step="0.5" data-split-key="${esc(r.key)}" data-split-f="pct" value="${o.pct!=null?esc(o.pct):""}" placeholder="${num(moneyRoles().find(x=>x.key===r.key)?.pct)}" ${can?"":"disabled"} aria-label="${esc(r.label)} percentage"></td></tr>`; }).join("")}</tbody></table>
     <div class="split-total" id="split-total"></div></div>`;
 }
@@ -1625,7 +1626,7 @@ function moneySettingsHtml(){
   const R=rolesDraft(), total=r2(R.reduce((a,r)=>a+num(r.pct),0)), ok=Math.abs(total-100)<0.01, ppl=moneyPeople();
   return `<div class="panel" style="padding:18px;max-width:860px">
     <h3 class="sub-head" style="margin-top:0">How money received is divided</h3>
-    <p class="hint">Every payment received on an invoice is split by these percentages. They must total 100%. People set here are the default for every project; each project can change them. Leave Developer and Lead empty to choose them per project (Lead defaults to the project lead).</p>
+    <p class="hint">Every payment received on an invoice is split by these percentages. They must total 100%. People set here are the default for every project; each project can change them. Leave Developer and Lead empty to choose them per project. The Lead share goes to whoever <b>brought the project in</b> (set on each project), not the person handling it.</p>
     <table class="items roles-table"><thead><tr><th>Share</th><th>Default person</th><th class="r">%</th><th></th></tr></thead><tbody>${R.map((r,i)=>`<tr>
       <td><input class="input" data-role="${i}" data-rf="label" value="${esc(r.label)}" aria-label="Share name" maxlength="40"></td>
       <td>${r.company?`<span class="cell-sub">Company fund</span>`:`<select class="input" data-role="${i}" data-rf="user_id" aria-label="Default person"><option value="">Choose per project</option>${ppl.map(u=>`<option value="${u.id}" ${r.user_id===u.id?"selected":""}>${esc(u.name)}</option>`).join("")}</select>`}</td>
