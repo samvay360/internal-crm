@@ -57,8 +57,8 @@ const ENTITIES = {
     label: "quotation",
     fields: { number: "text", client_id: "num", project_id: "num", title: "text", ref: "text", date: "text",
       valid_until: "text", status: "text", items: "json", discount: "num", tax_rate: "num", notes: "text",
-      total: "num", invoice_id: "num", doc_mode: "text", body: "text" },
-    required: ["number", "client_id"],
+      total: "num", invoice_id: "num", doc_mode: "text", body: "text", lead_id: "num" },
+    required: ["number"], // plus a client or a lead (validateRecord)
     unique: "number",
   },
   invoices: {
@@ -84,7 +84,7 @@ const ENTITIES = {
 };
 const SQL_TYPE = { text: "TEXT", num: "DOUBLE PRECISION", json: "JSONB" };
 // Link fields must point at a row in the same tenant.
-const LINKS = { client_id: "clients", project_id: "projects", owner_id: "users", assignee_id: "users", paid_by: "users", brought_by: "users",
+const LINKS = { client_id: "clients", project_id: "projects", owner_id: "users", assignee_id: "users", paid_by: "users", brought_by: "users", lead_id: "leads",
   invoice_id: "invoices", from_quote: "quotes", from_lead: "leads" };
 
 const DEFAULT_SETTINGS = {
@@ -303,6 +303,10 @@ async function validateRecord(req, entity, values, before) {
     if (req.user.role === "member" && values.split !== cleanProjectSplit(JSON.stringify(before?.split || []))) {
       if (before || values.split !== "[]") throw httpError(403, "Only administrators can change how a project's money is split.");
     }
+  }
+  if (entity === "quotes") {
+    const v = { ...(before || {}), ...values };
+    if (!v.client_id && !v.lead_id) throw httpError(400, "Choose a client or a lead for this quotation.");
   }
   if (entity === "settlements") {
     const v = { ...(before || {}), ...values };
@@ -829,6 +833,9 @@ app.post("/api/:entity", entityGuard, async (req, res) => {
     return rowOut(entity, await one(`INSERT INTO ${entity} (${cols.join(",")}) VALUES (${cols.map((_, i) => "$" + (i + 1)).join(",")}) RETURNING *`, vals));
   });
   await logActivity(req.tenantId, entity, rec.id, "created", `Added ${req.ent.label} ${describe(rec)}`, req.user.id);
+  if (entity === "clients" && rec.from_lead) {
+    await q("UPDATE quotes SET client_id = $1 WHERE tenant_id = $2 AND lead_id = $3 AND client_id IS NULL", [rec.id, req.tenantId, rec.from_lead]);
+  }
   res.status(201).json(rec);
 });
 

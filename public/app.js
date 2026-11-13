@@ -19,7 +19,7 @@ const NAV = [
 const S = {
   data:{leads:[],clients:[],projects:[],tasks:[],quotes:[],invoices:[],expenses:[],settlements:[],docs:[]}, unread:0, docFilter:"all",
   settings:{}, users:[], me:null, activity:[],
-  view:"overview", param:null, q:{}, mode:{leads:"board",tasks:"board"},
+  view:"overview", param:null, q:{}, mode:{leads:"board",tasks:"board",quotes:"board"},
   taskFilter:"all", leadRegion:"", expMonth:null, expCategory:"", settingsTab:"company", sheet:null,
   tenant:null, tenants:[], allUsers:[],
   dirty:{}, dirtyKey:"",  // what the viewer has typed into page forms, kept across redraws
@@ -156,6 +156,12 @@ function invoiceStatus(inv){
   if(inv.due_date && inv.due_date<todayISO()) return "Overdue";
   return t.paid>0 ? "Partially paid" : "Sent";
 }
+function quoteParty(q){
+  const c=byId("clients",q.client_id); if(c) return {name:c.company||c.name,kind:"client",id:c.id};
+  const l=byId("leads",q.lead_id); if(l) return {name:l.company||l.name,kind:"lead",id:l.id};
+  return {name:"—",kind:null};
+}
+const partyCell=q=>{ const p=quoteParty(q); return `${esc(p.name)}${p.kind==="lead"?' <span class="tag" title="Not a client yet">Lead</span>':""}`; };
 function quoteStatus(q){
   if(q.status==="Sent" && q.valid_until && q.valid_until<todayISO()) return "Expired";
   return q.status||"Draft";
@@ -380,7 +386,7 @@ function doRender(){
   // typed-in values belong to one page of one company; forget them when either changes
   const key=[S.view,S.param,S.tenant?.id].join("|");
   if(key!==S.dirtyKey){ S.dirty={}; S.dirtyKey=key; }
-  const views={overview:viewOverview,leads:viewLeads,clients:viewClients,projects:viewProjects,tasks:viewTasks,quotes:()=>viewDocs("quotes"),invoices:()=>viewDocs("invoices"),expenses:viewExpenses,money:viewMoney,settings:viewSettings,client:viewClient,project:viewProject,docs:viewDocsList,doc:viewDocPage};
+  const views={overview:viewOverview,leads:viewLeads,clients:viewClients,projects:viewProjects,tasks:viewTasks,quotes:viewQuotes,invoices:()=>viewDocs("invoices"),expenses:viewExpenses,money:viewMoney,settings:viewSettings,client:viewClient,project:viewProject,docs:viewDocsList,doc:viewDocPage};
   main.innerHTML=(views[S.view]||viewOverview)();
   main.removeAttribute("aria-busy");
   if(S.viewEnter){ S.viewEnter=false; main.classList.remove("view-enter"); void main.offsetWidth; main.classList.add("view-enter"); }
@@ -540,6 +546,51 @@ function viewDocs(col){
   }
   h+=`<div class="panel table-wrap"><table><thead><tr><th>Number</th><th>Client</th><th>Ref</th><th>Date</th><th>${isQ?"Valid until":"Due"}</th><th>Status</th><th class="r">Total</th>${isQ?"":`<th class="r">Balance</th>`}</tr></thead><tbody>${rows.map(d=>{const t=totals(d);return `<tr data-open="${col}:${d.id}"><td class="mono cell-main">${esc(d.number)}</td><td><div>${esc(clientName(d.client_id)||"—")}</div>${d.title?`<div class="cell-sub">${esc(d.title)}</div>`:""}</td><td>${esc(d.ref||"—")}</td><td>${fmtDate(d.date)}</td><td>${fmtDate(isQ?d.valid_until:d.due_date)}</td><td>${pill(st(d))}</td><td class="r num">${money(t.total)}</td>${isQ?"":`<td class="r num">${money(t.balance)}</td>`}</tr>`;}).join("")}</tbody></table></div>`;
   return h;
+}
+
+/* ---------- quotations: summary + board by stage ---------- */
+const QUOTE_COLS=["Draft","Sent","Accepted","Declined","Expired"];
+function quoteCardNote(q){
+  const st=quoteStatus(q), t=todayISO();
+  if(st==="Accepted"){ const inv=byId("invoices",q.invoice_id); return inv?`<span class="tag ok">Invoiced ${esc(inv.number)}</span>`:`<span class="qc-hint">Ready to invoice</span>`; }
+  if(st==="Expired") return `<span class="qc-late">Expired ${fmtDate(q.valid_until)}</span>`;
+  if(st==="Sent"&&q.valid_until){ const d=Math.round((new Date(q.valid_until+"T00:00:00")-new Date(t+"T00:00:00"))/864e5);
+    return d===0?`<span class="qc-late">Expires today</span>`:`<span class="${d<=7?"qc-soon":"qc-hint"}">Valid ${d} more day${d===1?"":"s"}</span>`; }
+  if(st==="Declined") return `<span class="qc-hint">Declined</span>`;
+  return `<span class="qc-hint">Created ${fmtDate(q.date||q.created_at)}</span>`;
+}
+function viewQuotes(){
+  const all=S.data.quotes, mode=S.mode.quotes||"board", t=todayISO(), wk=addDays(t,7);
+  const rows=all.filter(q=>matches({...q,_p:quoteParty(q).name,_by:userName(q.created_by)},S.q.quotes)).sort((a,b)=>(b.number||"").localeCompare(a.number||""));
+  let h=head("Quotations","Price your work, send it, and turn accepted quotations into invoices. Drag a card to change its stage.",
+    `${searchBox("quotes")}<div class="seg" role="group" aria-label="View"><button data-mode="quotes:board" aria-pressed="${mode==="board"}">Board</button><button data-mode="quotes:table" aria-pressed="${mode==="table"}">Table</button></div><button class="btn" data-act="csv-quotes">Export CSV</button>${addBtn("New quotation","new-quotes")}`);
+  if(!all.length) return h+`<div class="panel">${emptyState("No quotations yet","Create a quotation for a client or a lead, send it, and turn it into an invoice once it's accepted.","Create a quotation","new-quotes")}</div>`;
+  const by=st=>all.filter(q=>quoteStatus(q)===st), val=list=>list.reduce((a,q)=>a+totals(q).total,0);
+  const draft=by("Draft"), sent=by("Sent"), acc=by("Accepted"), dec=by("Declined");
+  const soon=sent.filter(q=>q.valid_until&&q.valid_until<=wk);
+  const win=acc.length+dec.length?Math.round(acc.length/(acc.length+dec.length)*100)+"%":"—";
+  h+=`<div class="kpis">
+    <div class="panel kpi"><div class="label">Open pipeline</div><div class="value">${money(val(draft)+val(sent))}</div><div class="sub">${draft.length} draft · ${sent.length} sent</div></div>
+    <div class="panel kpi"><div class="label">Awaiting reply</div><div class="value">${money(val(sent))}</div><div class="sub">${sent.length} sent to clients</div></div>
+    <div class="panel kpi"><div class="label">Accepted</div><div class="value">${money(val(acc))}</div><div class="sub">Win rate ${win} · ${acc.filter(q=>!byId("invoices",q.invoice_id)).length} not invoiced yet</div></div>
+    <div class="panel kpi"><div class="label">Expiring this week</div><div class="value" style="${soon.length?"color:var(--warn)":""}">${soon.length}</div><div class="sub">${soon.length?money(val(soon))+" at stake":"Nothing about to expire"}</div></div>
+  </div>`;
+  if(mode==="table") return h+quotesTable(rows);
+  return h+`<div class="board qboard">${QUOTE_COLS.map(st=>{ const items=rows.filter(q=>quoteStatus(q)===st);
+    return `<div class="col qcol-${st.toLowerCase()}" ${st==="Expired"?"":`data-drop="quotes:status:${st}"`}><div class="col-head"><span>${st} <span class="num">${items.length}</span></span><span class="num">${money(val(items))}</span></div>
+      ${items.map(q=>`<div class="card qcard" draggable="true" data-drag="${q.id}" data-open="quotes:${q.id}">
+        <div class="qc-top"><span class="mono">${esc(q.number)}</span><span class="num qc-amt">${money(totals(q).total)}</span></div>
+        <span class="t">${partyCell(q)}</span>${q.title?`<span class="cell-sub qc-title">${esc(q.title)}</span>`:""}
+        <span class="s">${quoteCardNote(q)}<span>${esc(userName(q.created_by).split(" ")[0])}</span></span></div>`).join("")||`<div class="col-empty">${st==="Expired"?"Sent quotations past their validity land here":"Drop a quotation here"}</div>`}</div>`; }).join("")}</div>`;
+}
+function quotesTable(rows){
+  return `<div class="panel table-wrap"><table><thead><tr><th>Number</th><th>For</th><th>Ref</th><th>Date</th><th>Valid until</th><th>Status</th><th class="r">Total</th></tr></thead><tbody>${rows.map(q=>`<tr data-open="quotes:${q.id}"><td class="mono cell-main">${esc(q.number)}</td><td><div>${partyCell(q)}</div>${q.title?`<div class="cell-sub">${esc(q.title)}</div>`:""}</td><td>${esc(q.ref||"—")}</td><td>${fmtDate(q.date)}</td><td>${fmtDate(q.valid_until)}</td><td>${pill(quoteStatus(q))}</td><td class="r num">${money(totals(q).total)}</td></tr>`).join("")||`<tr><td colspan="7" class="empty">No quotations match.</td></tr>`}</tbody></table></div>`;
+}
+// quotations on a lead's panel
+function leadQuotesHtml(leadId){
+  const list=S.data.quotes.filter(q=>q.lead_id===leadId);
+  return `<h3 class="sub-head">Quotations</h3>${list.length?`<ul class="list-plain linked-docs">${list.map(q=>`<li data-open="quotes:${q.id}"><span><span class="mono cell-main">${esc(q.number)}</span>${q.title?`<br><span class="cell-sub">${esc(q.title)}</span>`:""}</span><span class="meta"><span class="num">${money(totals(q).total)}</span> ${pill(quoteStatus(q))}</span></li>`).join("")}</ul>`:`<p class="hint">No quotations yet.</p>`}
+    <button type="button" class="btn sm" data-act="new-quotes" data-lead="${leadId}">+ New quotation</button>`;
 }
 
 /* ---------- expenses ---------- */
@@ -818,7 +869,7 @@ function showRecord(col,id,preset={}){
   let extra="";
   if(col==="leads"&&id) extra+=`<button type="button" class="btn" data-act="convert-lead">${rec.client_id&&byId("clients",rec.client_id)?"View client":"Convert to client"}</button>`;
   openSheet(`<form id="rec-form" style="display:contents" novalidate><div class="sheet-head"><h2 id="sheet-title">${id?esc(rec.name||rec.title||rec.description||(col==="settlements"?`Settlement · ${money(rec.amount)}`:"")):"New "+F.title}</h2><button type="button" class="btn ghost" data-close aria-label="Close">✕</button></div>
-  <div class="sheet-body">${metaStrip(rec)}<div class="form">${F.fields.map(f=>fieldHtml(f,rec)).join("")}</div>${col==="projects"?splitEditorHtml(rec):""}${id&&col!=="settlements"?linkedDocsHtml(col,id):""}${id?`<h3 class="sub-head">History</h3><div id="history" aria-busy="true"><div class="skel-lines"><i></i><i></i><i></i></div></div>`:""}</div>
+  <div class="sheet-body">${metaStrip(rec)}<div class="form">${F.fields.map(f=>fieldHtml(f,rec)).join("")}</div>${col==="projects"?splitEditorHtml(rec):""}${col==="leads"&&id?leadQuotesHtml(id):""}${id&&col!=="settlements"?linkedDocsHtml(col,id):""}${id?`<h3 class="sub-head">History</h3><div id="history" aria-busy="true"><div class="skel-lines"><i></i><i></i><i></i></div></div>`:""}</div>
   <div class="sheet-foot"><div class="grp">${canDelete?`<button type="button" class="btn danger" data-act="delete-rec">Delete</button>`:""}${extra}</div><div class="grp"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">${id?"Save changes":"Create "+F.title}</button></div></div></form>`);
   markSheetClean(); paintSplitTotal();
   if(id) loadHistory(col,id);
@@ -883,7 +934,8 @@ function drawDocEditor(){
   else body=`${metaStrip(d)}<div class="form">
     ${isQ?`<div class="field full"><label for="d-mode">Quotation format</label><select class="input" id="d-mode" data-d="doc_mode"><option value="">Standard — line items and totals</option><option value="markdown" ${md?"selected":""}>Custom document — write the body in Markdown</option></select><span class="hint">${md?"Your Markdown becomes the body. Header, client details, totals, signature and footer are still added automatically.":"Pick Custom document to paste a full proposal written in Markdown."}</span></div>`:""}
     <div class="field"><label for="d-number">${isQ?"Quotation":"Invoice"} number</label><input class="input mono" id="d-number" data-d="number" value="${esc(d.number)}"></div>
-    <div class="field"><label for="d-client">Client <span class="req">*</span></label><select class="input" id="d-client" data-d="client_id" data-num><option value="">— Select client —</option>${S.data.clients.map(c=>`<option value="${c.id}" ${c.id===d.client_id?"selected":""}>${esc(c.company||c.name)}</option>`).join("")}</select></div>
+    <div class="field"><label for="d-client">Client ${isQ?"":'<span class="req">*</span>'}</label><select class="input" id="d-client" data-d="client_id" data-num><option value="">${isQ?"— Not a client yet —":"— Select client —"}</option>${S.data.clients.map(c=>`<option value="${c.id}" ${c.id===d.client_id?"selected":""}>${esc(c.company||c.name)}</option>`).join("")}</select></div>
+    ${isQ?`<div class="field"><label for="d-lead">Lead</label><select class="input" id="d-lead" data-d="lead_id" data-num><option value="">— None —</option>${S.data.leads.filter(l=>!["Lost"].includes(l.stage)||l.id===d.lead_id).map(l=>`<option value="${l.id}" ${l.id===d.lead_id?"selected":""}>${esc(l.company?l.company+" · "+l.name:l.name)}</option>`).join("")}</select><span class="hint">For someone who isn't a client yet. Their quotations move to the client when the lead is converted.</span></div>`:""}
     <div class="field"><label for="d-date">Date</label><input class="input" type="date" id="d-date" data-d="date" value="${esc(d.date)}"></div>
     <div class="field"><label for="d-due">${isQ?"Valid until":"Due date"}</label><input class="input" type="date" id="d-due" data-d="${isQ?"valid_until":"due_date"}" value="${esc(isQ?d.valid_until:d.due_date)}"></div>
     <div class="field"><label for="d-title">Subject</label><input class="input" id="d-title" data-d="title" value="${esc(d.title||"")}" placeholder="e.g. Website redesign"></div>
@@ -938,7 +990,8 @@ function paymentsHtml(d){
 // The company's saved document layout (Settings → Documents), or the unsaved draft while editing it.
 const savedLayout = () => ({...DocTemplates.LAYOUT_DEFAULTS,...(S.settings.docLayout||{})});
 function docModel(col,d){
-  const isQ=col==="quotes", s=S.settings, c=byId("clients",d.client_id)||d._client||{};
+  const isQ=col==="quotes", s=S.settings, ld=byId("leads",d.lead_id);
+  const c=byId("clients",d.client_id)||(ld?{company:ld.company,name:ld.name,address:"",tax_id:""}:null)||d._client||{};
   const items=(d.items||[]).filter(i=>i.desc||num(i.rate)).map(i=>({desc:i.desc,hsn:i.hsn||"",qty:num(i.qty),rate:num(i.rate),amount:num(i.qty)*num(i.rate)}));
   return { kind:isQ?"quotation":"invoice", number:d.number||"", date:fmtDate(d.date), secondDate:fmtDate(isQ?d.valid_until:d.due_date),
     ref:d.ref||"", subject:d.title||"", notes:d.notes||"", bank:s.bank||"", currency:cur(), money, brandColor:s.brandColor||"",
@@ -975,7 +1028,7 @@ function syncDocTotals(){
 }
 function docBody(d){
   const items=d.items.filter(i=>i.desc||num(i.rate)).map(i=>({desc:i.desc,...(i.hsn?{hsn:String(i.hsn).trim()}:{}),qty:num(i.qty),rate:num(i.rate)}));
-  const out={number:d.number,client_id:d.client_id||null,project_id:d.project_id||null,title:d.title||"",ref:d.ref||"",date:d.date,status:d.status,items,
+  const out={number:d.number,client_id:d.client_id||null,...(d.valid_until!==undefined?{lead_id:d.lead_id||null}:{}),project_id:d.project_id||null,title:d.title||"",ref:d.ref||"",date:d.date,status:d.status,items,
     discount:num(d.discount),tax_rate:num(d.tax_rate),notes:d.notes||""};
   if(d.valid_until!==undefined) out.valid_until=d.valid_until;
   if(d.valid_until!==undefined){ out.doc_mode=d.doc_mode||""; out.body=d.doc_mode==="markdown"?(d.body||""):""; }
@@ -995,7 +1048,7 @@ function exportCsv(col){
     expenses:[["Date","date"],["Description","description"],["Category","category"],["Amount","amount"],["Paid to","vendor"],["Payment method","payment_method"],["Paid from",r=>r.paid_from==="personal"?"Own pocket":"Company money"],["Paid by",r=>r.paid_by?userName(r.paid_by):""],["Project",r=>projectName(r.project_id)],["Notes","notes"],["Added by",r=>userName(r.created_by)]],
     settlements:[["Date","date"],["From",r=>partyName(partyKey(r.from_party))],["To",r=>partyName(partyKey(r.to_party))],["Amount","amount"],["Method","method"],["Note","note"]],
     projects:[["Project","name"],["Client",r=>clientName(r.client_id)],["Status","status"],["Region","region"],["Start","start_date"],["Due","due_date"],["Budget","budget"]],
-    quotes:[["Number","number"],["Client",r=>clientName(r.client_id)],["Reference","ref"],["Date","date"],["Valid until","valid_until"],["Status",quoteStatus],["Total",r=>totals(r).total.toFixed(2)]],
+    quotes:[["Number","number"],["For",r=>quoteParty(r).name],["Lead / client",r=>quoteParty(r).kind||""],["Reference","ref"],["Date","date"],["Valid until","valid_until"],["Status",quoteStatus],["Total",r=>totals(r).total.toFixed(2)]],
     invoices:[["Number","number"],["Client",r=>clientName(r.client_id)],["Reference","ref"],["Date","date"],["Due","due_date"],["Status",invoiceStatus],["Total",r=>totals(r).total.toFixed(2)],["Paid",r=>totals(r).paid.toFixed(2)],["Balance",r=>totals(r).balance.toFixed(2)]]
   }[col];
   const q=v=>{ const s=String(v??""); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
@@ -1107,17 +1160,20 @@ async function handleClick(e,el){
   if(a==="new-project"){ const c=el.dataset.client?byId("clients",el.dataset.client):null, ld=c?.from_lead?byId("leads",c.from_lead):null;
     return openRecord("projects",null,c?{client_id:c.id,...(ld?{brought_by:ld.owner_id||ld.created_by||null}:{})}:{}); }
   if(a==="new-task") return openRecord("tasks",null,{project_id:Number(el.dataset.project)||(S.view==="project"?S.param:null)});
-  if(a==="new-quotes"||a==="new-invoices"){ const col=a.slice(4); if(!S.data.clients.length){ toast("Add a client first."); return openRecord("clients"); }
-    return openRecord(col,null,{client_id:Number(el.dataset.client)||null,project_id:Number(el.dataset.project)||null}); }
+  if(a==="new-quotes"||a==="new-invoices"){ const col=a.slice(4);
+    if(col==="invoices"&&!S.data.clients.length){ toast("Add a client first."); return openRecord("clients"); }
+    const lead=el.dataset.lead?byId("leads",el.dataset.lead):null;
+    return openRecord(col,null,{client_id:Number(el.dataset.client)||(lead?.client_id&&byId("clients",lead.client_id)?lead.client_id:null),project_id:Number(el.dataset.project)||null,...(lead?{lead_id:lead.id}:{})}); }
   if(a&&a.startsWith("csv-")) return exportCsv(a.slice(4));
   if(a==="remove-logo"){ try{ S.settings=await api("PUT","/api/settings",{logo:""}); applyBrand(S.settings); render(); toast("Logo removed"); }catch(err){ toast(err.message); } return; }
   if(a==="delete-rec"){ const {col,id}=S.sheet; if(await confirmBox(`Delete this ${FORMS[col].title}?`,"This removes it for everyone and cannot be undone.")){ if(await remove(col,id)){ closeSheetNav({force:true}); toast("Deleted"); } } return; }
   if(a==="convert-lead"){ const lead=byId("leads",S.sheet.id);
     if(lead.client_id&&byId("clients",lead.client_id)) return navigate({view:"client",param:lead.client_id});
     const c=await create("clients",{name:lead.name,company:lead.company||"",email:lead.email||"",phone:lead.phone||"",region:lead.region||"",ref:lead.ref||"",notes:lead.notes||"",from_lead:lead.id});
-    if(c){ await update("leads",lead.id,{stage:"Won",client_id:c.id,_activity:`Converted ${lead.name} to a client`}); toast("Client created and lead marked as won"); navigate({view:"client",param:c.id},{force:true}); } return; }
+    if(c){ S.data.quotes.forEach(q=>{ if(q.lead_id===lead.id&&!q.client_id) q.client_id=c.id; });
+      await update("leads",lead.id,{stage:"Won",client_id:c.id,_activity:`Converted ${lead.name} to a client`}); toast("Client created and lead marked as won"); navigate({view:"client",param:c.id},{force:true}); } return; }
   if(a==="save-doc"){ const {col,id,doc}=S.sheet;
-    if(!doc.client_id){ toast("Choose a client."); $("#d-client")?.focus(); return; }
+    if(!doc.client_id&&!(col==="quotes"&&doc.lead_id)){ toast(col==="quotes"?"Choose a client or a lead.":"Choose a client."); $("#d-client")?.focus(); return; }
     if(!doc.number){ toast("Enter a document number."); return; }
     const rec=id?await update(col,id,docBody(doc)):await create(col,docBody(doc));
     if(rec){ toast(id?"Saved":"Created"); S.sheet.id=rec.id; S.sheet.doc=JSON.parse(JSON.stringify(rec)); if(!S.sheet.doc.items.length) S.sheet.doc.items=[{desc:"",qty:1,rate:0}]; drawDocEditor(); markSheetClean();
@@ -1130,6 +1186,16 @@ async function handleClick(e,el){
     if(rec){ S.sheet.doc=JSON.parse(JSON.stringify(rec)); S.sheet.payReset=true; drawDocEditor(); markSheetClean();
       const no=rec.payments[rec.payments.length-1]?.receipt_no; toast(no?`Payment recorded · receipt ${no} ready to print`:"Payment recorded");
       if(no) navigate({...currentRoute(),receipt:no}); } return; }
+  if(a==="quote-to-invoice"&&!S.sheet.doc.client_id){ const q=S.sheet.doc, lead=byId("leads",q.lead_id);
+    if(!lead){ toast("Choose a client for this quotation first."); return; }
+    if(sheetIsDirty()){ toast("Save your changes first."); return; }
+    if(!await confirmBox(`Convert ${lead.name} to a client?`,"An invoice needs a client. This creates the client from the lead, marks the lead as won, and moves all of the lead's quotations to the new client.","Convert and continue")) return;
+    let cid=lead.client_id&&byId("clients",lead.client_id)?lead.client_id:null;
+    if(!cid){ const c=await create("clients",{name:lead.name,company:lead.company||"",email:lead.email||"",phone:lead.phone||"",region:lead.region||"",ref:lead.ref||"",notes:lead.notes||"",from_lead:lead.id}); if(!c) return; cid=c.id;
+      await update("leads",lead.id,{stage:"Won",client_id:cid,_activity:`Converted ${lead.name} to a client`}); }
+    S.data.quotes.forEach(x=>{ if(x.lead_id===lead.id&&!x.client_id) x.client_id=cid; });
+    const rec=await update("quotes",S.sheet.id,{client_id:cid}); if(!rec) return;
+    S.sheet.doc=JSON.parse(JSON.stringify(rec)); markSheetClean(); toast(`${lead.name} is now a client`); }
   if(a==="quote-to-invoice"){ const q=S.sheet.doc, s=S.settings;
     const inv={number:nextNumber("invoices",s.invoicePrefix||"INV-"),client_id:q.client_id,project_id:q.project_id,title:q.title,ref:q.ref,date:todayISO(),due_date:addDays(todayISO(),num(s.paymentDays??14)),status:"Draft",items:q.items,discount:q.discount,tax_rate:q.tax_rate,notes:q.notes,payments:[],from_quote:S.sheet.id};
     const rec=await create("invoices",docBody(inv));
@@ -1215,6 +1281,7 @@ document.addEventListener("change",async e=>{
     if(el.value==="markdown"){ d._items=d.items; d.items=[{desc:"Quoted amount",qty:1,rate:d._items.length>1||d._items[0]?.desc?totals({items:d._items}).sub:num(d._items[0]?.rate)}]; }
     else if(d._items){ d.items=d._items; delete d._items; }
     drawDocEditor(); }
+  if(el.dataset.d==="lead_id"&&S.sheet?.doc){ const l=byId("leads",el.value); S.sheet.doc.lead_id=l?l.id:null; if(l?.client_id&&byId("clients",l.client_id)&&!S.sheet.doc.client_id) S.sheet.doc.client_id=l.client_id; drawDocEditor(); }
   if(el.dataset.d==="client_id"&&S.sheet?.doc){ S.sheet.doc.client_id=Number(el.value)||null; drawDocEditor(); }
   if(el.id==="s-logo-file"&&el.files[0]){
     const f=el.files[0]; if(f.size>1_000_000){ toast("Use an image under 1 MB."); el.value=""; return; }
@@ -1289,6 +1356,7 @@ document.addEventListener("dragleave",e=>{ const col=e.target.closest?.("[data-d
 document.addEventListener("drop",async e=>{
   const col=e.target.closest?.("[data-drop]"); if(!col||!dragId) return; e.preventDefault(); col.classList.remove("drop");
   const [c,field,val]=col.dataset.drop.split(":"); const rec=byId(c,dragId); dragId=null;
+  if(c==="quotes"&&rec&&quoteStatus(rec)==="Expired"&&val==="Sent"){ toast("This quotation has expired. Open it and extend 'Valid until' to make it active again."); return; }
   if(!rec||rec[field]===val) return;
   const before=rec[field]; rec[field]=val; render();
   if(!await update(c,rec.id,{[field]:val})){ rec[field]=before; render(); }

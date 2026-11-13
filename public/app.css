@@ -350,6 +350,24 @@ td.r,th.r{text-align:right}
 .check-line input{accent-color:var(--accent);width:16px;height:16px}
 .pay-rcpt{font-family:var(--font-num);font-size:12px}
 
+/* ---------- quotations board ---------- */
+.qboard{grid-auto-columns:minmax(205px,1fr)}
+.qboard .col{border-top:3px solid var(--line-strong)}
+.qboard .qcol-sent{border-top-color:var(--info)}
+.qboard .qcol-accepted{border-top-color:var(--good)}
+.qboard .qcol-declined{border-top-color:var(--bad)}
+.qboard .qcol-expired{border-top-color:var(--warn);background:color-mix(in srgb,var(--warn-soft) 55%,var(--sunk))}
+.qcard{gap:6px}
+.qc-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.qc-top .mono{color:var(--muted);font-size:12px}
+.qc-amt{font-weight:700;font-size:14px}
+.qc-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.qc-hint{color:var(--muted)}
+.qc-soon{color:var(--warn);font-weight:600}
+.qc-late{color:var(--bad);font-weight:600}
+.tag.ok{border-color:color-mix(in srgb,var(--good) 40%,transparent);color:var(--good)}
+.col-empty{border:1px dashed var(--line-strong);border-radius:10px;padding:16px 10px;text-align:center;color:var(--muted);font-size:12px}
+
 /* ---------- money ---------- */
 .owes{color:var(--warn);font-weight:700;white-space:nowrap}
 .owed{color:var(--good);font-weight:700;white-space:nowrap}
